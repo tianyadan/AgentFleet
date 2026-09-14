@@ -149,7 +149,8 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		}
 		return agent.CodexAskMeta(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume, onCmd)
 	default:
-		return agent.GenericAsk(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity)
+		// Cursor Agent 等：--resume + JSON 解析 session_id
+		return agent.GenericAskMeta(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume)
 	}
 }
 

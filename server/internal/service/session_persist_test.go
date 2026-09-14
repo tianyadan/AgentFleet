@@ -15,3 +15,11 @@ func TestPersistSessionFlagForNoHook(t *testing.T) {
 		t.Fatal("normal ask should persist session")
 	}
 }
+
+// TestAskPromptUsesEmptyHistory 约定：调用引擎时 history 必须为空（由 resume 续聊）。
+func TestAskPromptUsesEmptyHistory(t *testing.T) {
+	history := "" // managed / E-bot 均不得再拼 RecentTurns
+	if history != "" {
+		t.Fatal("v0.2.18 must not inject platform turn history")
+	}
+}

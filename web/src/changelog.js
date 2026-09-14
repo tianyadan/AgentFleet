@@ -1,6 +1,15 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.2.18',
+    date: '2026-09-14',
+    items: [
+      '停拼平台 20 轮历史：Managed / E-bot 仅发系统提示词 + 本轮问题，多轮靠引擎 resume',
+      'Claude / Codex / Cursor 统一续聊；Cursor 解析 session_id 并支持 --resume',
+      '停用 Ask 路径 MySQL MemoryService 注入（工作经验后续再做）',
+    ],
+  },
+  {
     version: 'v0.2.17',
     date: '2026-09-14',
     items: [

@@ -9,8 +9,6 @@ import (
 	"colleague-avatar/server/internal/store"
 )
 
-const managedMaxTurns = 20
-
 // AskManaged 管理台智能体一轮对话;onEvent 推送 SSE 事件(chunk/invoke_*/…)。可被 StopManaged 取消。
 func (s *Service) AskManaged(ctx context.Context, agentID int64, question string, onEvent AskEventSink) (*store.Message, error) {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
@@ -60,15 +58,8 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		return nil, fmt.Errorf("empty question")
 	}
 	userQuestion := question
-	// 注入长期记忆（仅进引擎 prompt，不写入用户气泡）
+	// v0.2.18：不再注入平台历史/Memory；上下文靠引擎 resume + 本轮问题。
 	engineQuestion := question
-	if s.Memory != nil {
-		if mems, err := s.Memory.Retrieve(ctx, agentID, question, 5); err == nil {
-			if block := FormatMemoriesForPrompt(mems); block != "" {
-				engineQuestion = block + "\n" + question
-			}
-		}
-	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	slot := &managedRun{cancel: cancel}
@@ -143,7 +134,6 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		return s.askManagedWithInvokes(runCtx, a, convID, bindMainConv, userQuestion, taskBody, mentions, steps, tp, onEvent, onChunk)
 	}
 
-	history := s.buildManagedHistory(runCtx, convID)
 	sys := BuildAgentSystemPrompt(a)
 	userTurns, _ := s.Store.CountUserMessages(runCtx, convID)
 	q := MaybeReinforcePolicy(a, userTurns, engineQuestion)
@@ -155,7 +145,8 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		tp.advance(runCtx, mid, steps[mid])
 	}
 
-	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, sys, q, history, onChunk, onEvent, userQuestion)
+	// history 恒空：由 Claude/Codex/Cursor resume 维护多轮上下文
+	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, sys, q, "", onChunk, onEvent, userQuestion)
 	return s.finishManagedAsk(runCtx, agentID, convID, bindMainConv, out, ms, runErr, tp)
 }
 
@@ -209,32 +200,14 @@ func (s *Service) askManagedWithInvokes(
 	tp.advance(ctx, sumStep, steps[sumStep])
 
 	sys := BuildAgentSystemPrompt(caller) + "\n你是编排方：根据各智能体的隔离结果分别汇总，并标明归属。"
-	history := s.buildManagedHistory(ctx, convID)
 	sumQ := buildSummaryQuestion(taskBody, results)
 	userTurns, _ := s.Store.CountUserMessages(ctx, convID)
 	sumQ = MaybeReinforcePolicy(caller, userTurns, sumQ)
 
-	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, sys, sumQ, history, onChunk, onEvent, taskBody)
+	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, sys, sumQ, "", onChunk, onEvent, taskBody)
 	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp)
 	s.writeInvokeDividersAsync(caller, taskBody, results)
 	return msg, err
-}
-
-func (s *Service) buildManagedHistory(ctx context.Context, convID int64) string {
-	turns, err := s.Store.RecentTurns(ctx, convID, managedMaxTurns)
-	if err != nil || len(turns) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("<历史对话上下文>\n")
-	for _, t := range turns {
-		sb.WriteString("user: " + t.User + "\n")
-		if t.Assistant != "" {
-			sb.WriteString("assistant: " + truncate(t.Assistant, 2000) + "\n")
-		}
-	}
-	sb.WriteString("</历史对话上下文>\n")
-	return sb.String()
 }
 
 func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, bindMainConv bool, out string, ms int, runErr error, tp *TaskProgress) (*store.Message, error) {

@@ -931,7 +931,7 @@ export default function App() {
           {/* 当前长对话提示 */}
           {mode === 'chat' && (
             <div className="conv-badge">
-              {currentConvId ? `当前会话 #${currentConvId} · 上下文最近 20 轮` : '请点击右上角「新建对话」开始'}
+              {currentConvId ? `当前会话 #${currentConvId} · 引擎续聊` : '请点击右上角「新建对话」开始'}
             </div>
           )}
 

@@ -23,7 +23,6 @@ import (
 const (
 	ModeSingle = "single"
 	ModeChat   = "chat"
-	maxTurns   = 20
 )
 
 // QuestionReq 提问请求。
@@ -397,23 +396,8 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 		wsPath = matched
 	}
 
-	// 长对话: 取最近 20 轮组装上下文
+	// v0.2.18：不再拼平台历史；多轮靠引擎 --resume + 本轮问题
 	history := ""
-	if mode == ModeChat && convID > 0 {
-		turns, err := s.Store.RecentTurns(ctx, convID, maxTurns)
-		if err == nil && len(turns) > 0 {
-			var sb strings.Builder
-			sb.WriteString("<历史对话上下文>\n")
-			for _, t := range turns {
-				sb.WriteString("user: " + t.User + "\n")
-				if t.Assistant != "" {
-					sb.WriteString("assistant: " + truncate(t.Assistant, 2000) + "\n")
-				}
-			}
-			sb.WriteString("</历史对话上下文>\n")
-			history = sb.String()
-		}
-	}
 
 	// 工作目录: 仅取真实文件系统路径。db 数据查询项目(db://...)无对应目录,
 	// 回退到第一个 code 工作区作为 cwd;数据检索由 Agent 通过后端只读接口完成。
@@ -438,7 +422,14 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 			TimeoutS: s.Cfg.PermissionWaitSeconds() + 30,
 		}
 	}
-	full, ms, aerr := s.Agent.AskStream(ctx, dir, sysPrompt, req.Question, history, onChunk, timeout, hook, nil, nil, "")
+	resume := ""
+	if em, err := s.Store.GetConversationEngineMeta(ctx, convID); err == nil {
+		resume = em.SessionID
+	}
+	onMeta := func(m agent.RunMeta) {
+		s.RememberEngineMeta(context.WithoutCancel(ctx), 0, convID, m)
+	}
+	full, ms, aerr := s.Agent.AskStream(ctx, dir, sysPrompt, req.Question, history, onChunk, timeout, hook, nil, onMeta, resume)
 
 	status := "ok"
 	content := full

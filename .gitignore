@@ -1,0 +1,18 @@
+# Go
+.gocache/
+server/server
+server/main
+server/bin/
+bin/
+*.exe
+*.test
+*.out
+
+# 环境
+.env
+.env.local
+
+# OS
+.DS_Store
+
+# 前端(node_modules 已在 web/.gitignore)

@@ -11,15 +11,15 @@ import (
 func BuildAgentSystemPrompt(a *store.ManagedAgent) string {
 	base := strings.TrimSpace(a.RulesPrompt)
 	if base == "" {
-		base = "你是管理台智能体「" + a.Name + "」,按用户指令完成开发/排查任务。回答简洁专业。"
+		base = "你是数字员工「" + a.Name + "」,按用户指令完成开发/排查任务。回答简洁专业。"
 	}
-	return base + "\n\n" + AgentPolicyBlock(a)
+	return base + "\n\n" + AgentPolicyBlock(a) + "\n\n" + ProjectMemoryHint()
 }
 
 // AgentPolicyBlock 权限策略条文(始终注入)。
 func AgentPolicyBlock(a *store.ManagedAgent) string {
 	var b strings.Builder
-	b.WriteString("【智能体权限策略 — 必须遵守】\n")
+	b.WriteString("【数字员工权限策略 — 必须遵守】\n")
 	if a.AllowWrite {
 		b.WriteString("- 写入权限:允许修改/创建文件(仍可能需用户授权弹窗)。\n")
 	} else {

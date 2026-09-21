@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { workflowApi } from './workflowApi.js'
 import NodeRunPanel from './NodeRunPanel.jsx'
 import WorkflowRunGraph, { ExecStatusRow, latestStatusByNode } from './WorkflowRunGraph.jsx'
+import { nextRunSelection } from './pickRunSelection.js'
 
 function runStatusLabel(st) {
   return ({
@@ -20,27 +21,43 @@ export default function WorkflowRun({ runId, authHeaders, onUnauthorized, onBack
   const [selectedNodeId, setSelectedNodeId] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  /** 用户点过画布/列表后，轮询不再强制跟到当前 running 节点 */
+  const followLiveRef = useRef(true)
+  const selectedNodeIdRef = useRef('')
+
+  function rememberNodeId(nodeId) {
+    selectedNodeIdRef.current = nodeId || ''
+    setSelectedNodeId(selectedNodeIdRef.current)
+  }
+
+  /** 仅在未手动选择时，默认跟到运行中节点（否则保住当前选中） */
+  function applySelection(execs) {
+    setSelectedId((cur) => {
+      const next = nextRunSelection(execs, {
+        followLive: followLiveRef.current,
+        curId: cur,
+        nodeId: selectedNodeIdRef.current,
+      })
+      if (next.nodeId) rememberNodeId(next.nodeId)
+      return next.id
+    })
+  }
 
   async function refresh() {
     const d = await api.getRun(runId)
     if (d.error) { setError(d.error); return }
     setDetail(d)
-    const execs = d.executions || []
-    setSelectedId((cur) => {
-      const running = [...execs].reverse().find((e) => e.status === 'running')
-      if (running) {
-        setSelectedNodeId(running.node_id)
-        return running.id
-      }
-      if (cur && execs.some((e) => e.id === cur)) return cur
-      const failed = [...execs].reverse().find((e) => e.status === 'failed')
-      const pick = failed || execs[execs.length - 1]
-      if (pick) setSelectedNodeId(pick.node_id)
-      return pick?.id || 0
-    })
+    applySelection(d.executions || [])
+  }
+
+  function pickUserExec(execId, nodeId) {
+    followLiveRef.current = false
+    setSelectedId(execId || 0)
+    rememberNodeId(nodeId)
   }
 
   useEffect(() => {
+    followLiveRef.current = true
     refresh()
     const t = setInterval(refresh, 1500)
     return () => clearInterval(t)
@@ -63,9 +80,8 @@ export default function WorkflowRun({ runId, authHeaders, onUnauthorized, onBack
   const byNode = latestStatusByNode(execs)
 
   function selectNode(nodeId) {
-    setSelectedNodeId(nodeId)
     const ex = byNode[nodeId]
-    if (ex) setSelectedId(ex.id)
+    pickUserExec(ex?.id || 0, nodeId)
   }
 
   async function retryNode(nodeId, extra = '') {
@@ -149,7 +165,7 @@ export default function WorkflowRun({ runId, authHeaders, onUnauthorized, onBack
               <ExecStatusRow
                 ex={ex}
                 active={selectedId === ex.id}
-                onClick={() => { setSelectedId(ex.id); setSelectedNodeId(ex.node_id) }}
+                onClick={() => pickUserExec(ex.id, ex.node_id)}
               />
             </li>
           ))}

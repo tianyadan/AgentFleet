@@ -6,6 +6,7 @@ import ManagedAgentsPanel, { ManagedAgentPermOverlay } from './ManagedAgents.jsx
 import { anyAgentLoading, allPendingPerms, getAgentSession, listSessionAgentIds, subscribeAgentSessions } from './managedAgentSessions.js'
 import { WorkflowPanel } from './workflow/index.js'
 import WorkflowPermOverlay, { useWorkflowBadges } from './workflow/WorkflowPermOverlay.jsx'
+import { AdminMenuIcon } from './adminMenuIcons.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -15,8 +16,8 @@ marked.setOptions({ breaks: true, gfm: true })
 const ADMIN_MENUS = [
   { id: 'history', label: '历史' },
   { id: 'stats', label: '统计' },
-  { id: 'agents', label: '智能体管理' },
-  { id: 'plans', label: '团队编排' },
+  { id: 'agents', label: '数字员工管理' },
+  { id: 'plans', label: '项目协作' },
   { id: 'memos', label: '备忘录' },
   { id: 'passwords', label: '常用密码' },
   { id: 'servers', label: '服务器' },
@@ -29,7 +30,7 @@ export default function App() {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem(AUTH_TOKEN_KEY) || '')
   const [username, setUsername] = useState('')
   const [view, setView] = useState('chat') // chat | admin
-  const [adminMenu, setAdminMenu] = useState('history')
+  const [adminMenu, setAdminMenu] = useState('agents')
   const [jumpWorkflowRunId, setJumpWorkflowRunId] = useState(0)
   const [loginOpen, setLoginOpen] = useState(false)
   const [loginUser, setLoginUser] = useState('tianhaowen')
@@ -48,6 +49,7 @@ export default function App() {
   const [mode, setMode] = useState('single') // single / chat
   const [currentConvId, setCurrentConvId] = useState(0) // 0=未选/单次按次新建
   const [sessions, setSessions] = useState([]) // 列表(按IP分组由后端保证)
+  const [compressing, setCompressing] = useState(false)
   const modeCacheRef = useRef({
     single: { convId: 0, chatLog: [] },
     chat: { convId: 0, chatLog: [] },
@@ -65,7 +67,7 @@ export default function App() {
 
   const wfBadges = useWorkflowBadges(authHeaders, !!authToken)
 
-  // 清登录态并回对话页(不中断后台智能体 SSE)
+  // 清登录态并回对话页(不中断后台数字员工 SSE)
   function clearAuth(msg) {
     if (anyAgentLoading() && authToken) {
       bgTokenRef.current = authToken
@@ -124,7 +126,7 @@ export default function App() {
       setUsername(d.username || loginUser.trim())
       setLoginPass('')
       setLoginOpen(false)
-      setAdminMenu('history')
+      setAdminMenu('agents')
       setView('admin')
       setError('')
     } catch {
@@ -385,6 +387,23 @@ export default function App() {
     loadSessions()
   }
 
+  // 引擎原生压缩上下文，保留 session，清空平台历史并留系统提示
+  async function compressConversation() {
+    if (!currentConvId || compressing || loading) return
+    setCompressing(true)
+    setError('')
+    try {
+      const res = await fetch(`${API}/conversations/${currentConvId}/compress`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || '压缩失败')
+      await openConversation(currentConvId)
+    } catch (e) {
+      setError(String(e.message || e))
+    } finally {
+      setCompressing(false)
+    }
+  }
+
   // 切换模式:各自保留会话与消息,互不带走
   function switchMode(m) {
     if (m === mode) return
@@ -528,6 +547,32 @@ export default function App() {
           } else if (ev.type === 'command') {
             // v0.0.9: 已执行命令直接显示在对话流,便于审阅
             setChatLog((prev) => [...prev, { role: 'command', content: ev.summary || ev.tool_name }])
+          } else if (ev.type === 'context_compacted') {
+            // 保留本轮 user + assistant，避免 Codex 压缩同步把刚出现的回复清掉
+            setChatLog((prev) => {
+              let lastUser = null
+              let lastAsst = null
+              let userIdx = -1
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].role === 'user' && (prev[i].content || '').trim()) {
+                  userIdx = i
+                  lastUser = { role: 'user', content: prev[i].content }
+                  break
+                }
+              }
+              if (userIdx >= 0) {
+                for (let i = prev.length - 1; i > userIdx; i--) {
+                  if (prev[i].role === 'assistant' && (prev[i].content || '').trim()) {
+                    lastAsst = { role: 'assistant', content: prev[i].content, replySec: prev[i].replySec }
+                    break
+                  }
+                }
+              }
+              const next = [{ role: 'assistant', content: ev.content || '📦 上下文已由引擎压缩，会话已保留' }]
+              if (lastUser) next.push(lastUser)
+              if (lastAsst) next.push(lastAsst)
+              return next
+            })
           } else if (ev.type === 'permission_request') {
             setPermQueue((prev) => dedup([...prev, ev]))
           } else if (ev.type === 'permission_resolved') {
@@ -723,13 +768,16 @@ export default function App() {
                 onClick={() => switchAdminMenu(m.id)}
                 title={m.label}
               >
-                <span className="admin-side-label">{m.label}</span>
+                <span className="admin-side-main">
+                  <AdminMenuIcon name={m.id} />
+                  <span className="admin-side-label">{m.label}</span>
+                </span>
                 <span className="admin-side-badges">
                   {m.id === 'agents' && pendingPermCount > 0 && (
                     <span className="admin-badge admin-badge-perm" title="待授权命令">{pendingPermCount}</span>
                   )}
                   {m.id === 'agents' && workflowBusyCount > 0 && (
-                    <span className="admin-badge admin-badge-workflow" title="团队编排忙碌">{workflowBusyCount}</span>
+                    <span className="admin-badge admin-badge-workflow" title="项目协作忙碌">{workflowBusyCount}</span>
                   )}
                   {m.id === 'agents' && runningCount > 0 && (
                     <span className="admin-badge" title="直接运行中">{runningCount}</span>
@@ -880,7 +928,7 @@ export default function App() {
           <span className="brand-slogan">多智协同，分身执行</span>
           <div className="topbar-actions">
             {authToken ? (
-              <button type="button" onClick={() => { setView('admin'); setAdminMenu('history') }}>管理台</button>
+              <button type="button" onClick={() => { setView('admin'); setAdminMenu('agents') }}>管理台</button>
             ) : (
               <button type="button" onClick={() => { setLoginErr(''); setLoginOpen(true) }}>登录</button>
             )}
@@ -923,7 +971,18 @@ export default function App() {
                 <span className="auto-label">AI 自动审核</span>
               </label>
               {mode === 'chat' && (
-                <button className="new" onClick={newConversation}>＋ 新建对话</button>
+                <>
+                  <button
+                    className="new"
+                    type="button"
+                    disabled={!currentConvId || compressing || loading}
+                    onClick={compressConversation}
+                    title="调用引擎原生压缩，保留会话"
+                  >
+                    {compressing ? '压缩中…' : '压缩'}
+                  </button>
+                  <button className="new" onClick={newConversation}>＋ 新建对话</button>
+                </>
               )}
             </div>
           </div>

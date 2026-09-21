@@ -11,10 +11,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"colleague-avatar/server/internal/service"
 	"colleague-avatar/server/internal/store"
 )
 
-// AdminAgentsList 智能体列表。
+// AdminAgentsList 数字员工列表。
 func (h *Handler) AdminAgentsList(c *gin.Context) {
 	items, err := h.svc.Store.ListManagedAgents(c.Request.Context())
 	if err != nil {
@@ -41,7 +42,7 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": out})
 }
 
-// AdminAgentsCreate 一键创建智能体。
+// AdminAgentsCreate 一键招聘数字员工。
 func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	var body struct {
 		Name            string `json:"name"`
@@ -64,7 +65,7 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	name := strings.TrimSpace(body.Name)
 	engine := strings.ToLower(strings.TrimSpace(body.Engine))
 	if name == "" {
-		name = "未命名智能体"
+		name = "未命名员工"
 	}
 	if !store.ValidEngine(engine) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "engine must be claude|codex|agent"})
@@ -87,6 +88,119 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
 	if h.svc.Sched != nil {
 		h.svc.Sched.Reload(c.Request.Context())
+	}
+	c.JSON(http.StatusOK, a)
+}
+
+// AdminAgentsCopy 复制数字员工（独立 session，异步隐藏初始化）。
+func (h *Handler) AdminAgentsCopy(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	var body struct {
+		Name      string `json:"name"`
+		AvatarURL string `json:"avatar_url"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name required"})
+		return
+	}
+	a, err := h.svc.CopyManagedAgent(c.Request.Context(), id, name, strings.TrimSpace(body.AvatarURL))
+	if err != nil {
+		if service.IsInitializingConflict(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, a)
+}
+
+// AdminAgentsRetryInit 复制初始化失败后重试。
+func (h *Handler) AdminAgentsRetryInit(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	a, err := h.svc.RetryCloneInit(c.Request.Context(), id)
+	if err != nil {
+		if service.IsInitializingConflict(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, a)
+}
+
+// AdminAgentsUploadAvatar 上传头像到 OSS（压缩后）。
+func (h *Handler) AdminAgentsUploadAvatar(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	fh, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file required"})
+		return
+	}
+	f, err := fh.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 8<<20+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(raw) > 8<<20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "图片过大（上限 8MB）"})
+		return
+	}
+	a, err := h.svc.UploadAgentAvatar(c.Request.Context(), id, raw)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, a)
+}
+
+// AdminAgentsClearAvatar 清空头像（回默认图）。
+func (h *Handler) AdminAgentsClearAvatar(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	a, err := h.svc.ClearAgentAvatar(c.Request.Context(), id)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, a)
 }
@@ -166,10 +280,10 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, a)
 }
 
-// AdminAgentsDelete 删除智能体。
+// AdminAgentsDelete 解聘数字员工。
 func (h *Handler) AdminAgentsDelete(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err := h.svc.Store.DeleteManagedAgent(c.Request.Context(), id); err != nil {
+	if err := h.svc.DeleteManaged(c.Request.Context(), id); err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
@@ -211,7 +325,7 @@ func (h *Handler) AdminAgentsMessages(c *gin.Context) {
 	})
 }
 
-// AdminAgentsFile 读取智能体工作区内的图片(鉴权;防目录穿越)。
+// AdminAgentsFile 读取数字员工工作区内的图片(鉴权;防目录穿越)。
 func (h *Handler) AdminAgentsFile(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	raw := strings.TrimSpace(c.Query("path"))
@@ -234,7 +348,7 @@ func (h *Handler) AdminAgentsFile(c *gin.Context) {
 	c.File(abs)
 }
 
-// AdminAgentsAsk SSE 提问管理型智能体(含授权事件转发)。
+// AdminAgentsAsk SSE 提问数字员工(含授权事件转发)。
 func (h *Handler) AdminAgentsAsk(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
@@ -366,10 +480,10 @@ func (h *Handler) AdminAgentsClear(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// AdminAgentsNew 新对话。
-func (h *Handler) AdminAgentsNew(c *gin.Context) {
+// AdminAgentsEnsureConversation 若尚无会话则创建（不替换已有会话）。
+func (h *Handler) AdminAgentsEnsureConversation(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	conv, err := h.svc.NewManagedChat(c.Request.Context(), id)
+	conv, err := h.svc.EnsureManagedConversation(c.Request.Context(), id)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -381,13 +495,20 @@ func (h *Handler) AdminAgentsNew(c *gin.Context) {
 func (h *Handler) AdminAgentsCompress(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err := h.svc.CompressManagedChat(c.Request.Context(), id); err != nil {
+		if service.IsInitializingConflict(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		if occupancyBusyJSON(c, err) {
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// AdminAgentsTasks 该智能体相关任务进度(按 agent_id；优先 managed 类型平台任务)。
+// AdminAgentsTasks 该数字员工相关任务进度(按 agent_id；优先 managed 类型平台任务)。
 func (h *Handler) AdminAgentsTasks(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	a, err := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
@@ -414,7 +535,7 @@ func (h *Handler) AdminAgentsTasks(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// AdminAgentsStop 终止当前进行中的智能体问答。
+// AdminAgentsStop 终止当前进行中的数字员工问答。
 func (h *Handler) AdminAgentsStop(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	ok := h.svc.StopManaged(id)
@@ -462,7 +583,7 @@ func (h *Handler) AdminNotifyPermission(c *gin.Context) {
 		}
 	}
 	if name == "" {
-		name = "未命名智能体"
+		name = "未命名员工"
 	}
 	cmd := strings.TrimSpace(body.Command)
 	if cmd == "" {
@@ -476,7 +597,7 @@ func (h *Handler) AdminNotifyPermission(c *gin.Context) {
 	if riskLabel == "" {
 		riskLabel = risk
 	}
-	msg := "智能体: " + name + "\n待执行命令: " + cmd + "\n风险等级: " + riskLabel
+	msg := "数字员工: " + name + "\n待执行命令: " + cmd + "\n风险等级: " + riskLabel
 	if m := strings.TrimSpace(body.Meaning); m != "" {
 		msg += "\n含义/风险说明: " + m
 	}
@@ -508,7 +629,7 @@ func activitySummary(tool, summary string) string {
 	return summary
 }
 
-// AdminAgentFoldersList 文件夹列表。
+// AdminAgentFoldersList 工作组列表。
 func (h *Handler) AdminAgentFoldersList(c *gin.Context) {
 	items, err := h.svc.Store.ListAgentFolders(c.Request.Context())
 	if err != nil {
@@ -521,7 +642,7 @@ func (h *Handler) AdminAgentFoldersList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
-// AdminAgentFoldersCreate 创建空文件夹。
+// AdminAgentFoldersCreate 创建空工作组。
 func (h *Handler) AdminAgentFoldersCreate(c *gin.Context) {
 	var body struct {
 		Name string `json:"name"`
@@ -535,7 +656,7 @@ func (h *Handler) AdminAgentFoldersCreate(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": id, "name": strings.TrimSpace(body.Name)})
 }
 
-// AdminAgentFoldersUpdate 重命名文件夹。
+// AdminAgentFoldersUpdate 重命名工作组。
 func (h *Handler) AdminAgentFoldersUpdate(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
@@ -556,7 +677,7 @@ func (h *Handler) AdminAgentFoldersUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// AdminAgentFoldersDelete 删除文件夹。
+// AdminAgentFoldersDelete 删除工作组。
 func (h *Handler) AdminAgentFoldersDelete(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err := h.svc.Store.DeleteAgentFolder(c.Request.Context(), id); err != nil {
@@ -570,7 +691,7 @@ func (h *Handler) AdminAgentFoldersDelete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// AdminAgentsSetFolder 拖拽归类：将智能体移入文件夹（folder_id=0 表示根目录）。
+// AdminAgentsSetFolder 拖拽归类：将数字员工移入工作组（folder_id=0 表示未入组）。
 func (h *Handler) AdminAgentsSetFolder(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
@@ -590,6 +711,28 @@ func (h *Handler) AdminAgentsSetFolder(c *gin.Context) {
 	}
 	a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
 	c.JSON(http.StatusOK, a)
+}
+
+// AdminAgentsTaskPlan 开关任务规划（Ask 前 AI 拆分步骤与进度面板）。
+func (h *Handler) AdminAgentsTaskPlan(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if err := h.svc.Store.SetManagedAgentTaskPlan(c.Request.Context(), id, body.Enabled); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": body.Enabled, "agent": a})
 }
 
 // AdminAgentsStatus 本地状态快照（不入库）；优先引擎真实上下文。

@@ -31,6 +31,14 @@ type Config struct {
 	AdminPass   string // 管理台密码(明文比对)
 	JWTSecret   string // 管理台 JWT HS256 密钥
 	JWTTTLHours int    // JWT 有效小时数
+
+	// 数字员工头像 OSS（未配齐则上传接口不可用）
+	OSSEndpoint        string // 如 oss-cn-qingdao.aliyuncs.com
+	OSSAccessKeyID     string
+	OSSAccessKeySecret string
+	OSSBucket          string
+	OSSPrefix          string // object 前缀，如 avatars/
+	OSSPublicBase      string // 公网访问根，如 https://digital-employee-qd.cn-qingdao.taihangcda.cn
 }
 
 func getenv(key, def string) string {
@@ -70,7 +78,20 @@ func Load() Config {
 		AdminPass:   getenv("AVATAR_ADMIN_PASS", "12345678"),
 		JWTSecret:   getenv("AVATAR_JWT_SECRET", "colleague-avatar-jwt-dev-secret-change-me"),
 		JWTTTLHours: atoi(getenv("AVATAR_JWT_TTL_HOURS", "168")),
+
+		OSSEndpoint:        strings.TrimSpace(getenv("AVATAR_OSS_ENDPOINT", "")),
+		OSSAccessKeyID:     strings.TrimSpace(getenv("AVATAR_OSS_ACCESS_KEY_ID", "")),
+		OSSAccessKeySecret: strings.TrimSpace(getenv("AVATAR_OSS_ACCESS_KEY_SECRET", "")),
+		OSSBucket:          strings.TrimSpace(getenv("AVATAR_OSS_BUCKET", "")),
+		OSSPrefix:          strings.Trim(strings.TrimSpace(getenv("AVATAR_OSS_PREFIX", "avatars/")), "/") + "/",
+		OSSPublicBase:      strings.TrimRight(strings.TrimSpace(getenv("AVATAR_OSS_PUBLIC_BASE", "")), "/"),
 	}
+}
+
+// OSSConfigured 头像上传所需 OSS 是否齐全。
+func (c Config) OSSConfigured() bool {
+	return c.OSSEndpoint != "" && c.OSSAccessKeyID != "" && c.OSSAccessKeySecret != "" &&
+		c.OSSBucket != "" && c.OSSPublicBase != ""
 }
 
 // JWTTTL 返回管理员 JWT 有效期(至少 1 小时)。

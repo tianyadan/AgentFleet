@@ -15,7 +15,7 @@ import (
 // AskEventSink SSE/进度事件回调。
 type AskEventSink func(ev map[string]any)
 
-// InvokeResult 单个被调智能体的隔离结果。
+// InvokeResult 单个被调同事的隔离结果。
 type InvokeResult struct {
 	AgentID   int64  `json:"agent_id"`
 	AgentName string `json:"agent_name"`
@@ -112,7 +112,8 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	case "claude":
 		r := agent.NewRunner(bin)
 		hook := agent.HookSpec{}
-		if !noHook && s.Cfg.PermissionEnabled && s.Cfg.HookBin != "" {
+		// HookBin 存在即注入：PreToolUse + Pre/PostCompact（压缩同步不依赖 PermissionEnabled）
+		if !noHook && s.Cfg.HookBin != "" {
 			cid := permConvID
 			if cid == 0 {
 				cid = a.ConversationID
@@ -129,6 +130,8 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		}
 		return r.AskStream(ctx, dir, sys, question, history, onChunk, timeout, hook, onActivity, onMeta, resume)
 	case "codex":
+		// 不写项目 .codex/hooks：Pre/PostCompact 会与 ask 竞态清库，导致「回复完过一会消失」。
+		// 仅监听 JSONL compaction，并延后到 finishManagedAsk 之后再同步。
 		onCmd := func(ev agent.CodexCommandEvent) {
 			if !ev.Done {
 				if onActivity != nil {
@@ -147,14 +150,21 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				s.recordCommand(context.WithoutCancel(ctx), metaConv, "Bash", summary, "allow", "codex", "low", "Codex 已执行命令", strings.TrimSpace(ev.Output))
 			}
 		}
-		return agent.CodexAskMeta(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume, onCmd)
+		onCompact := func() {
+			// 只打标，等回复落库后再 Sync，避免 loadDetail 读到被清空的库
+			s.markCompactPending(metaConv)
+		}
+		return agent.CodexAskMetaEx(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact)
 	default:
 		// Cursor Agent 等：--resume + JSON 解析 session_id
+		if !noHook && s.Cfg.HookBin != "" && metaConv > 0 {
+			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, metaConv)
+		}
 		return agent.GenericAskMeta(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume)
 	}
 }
 
-// invokeOne 委托单个智能体(不写入其对话正文,只返回结果)。
+// invokeOne 委托单个同事(不写入其对话正文,只返回结果)。
 func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m Mention, taskBody string, sink AskEventSink) InvokeResult {
 	res := InvokeResult{AgentID: m.ID, AgentName: m.Name}
 	emitAsk(sink, map[string]any{
@@ -202,7 +212,7 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 	})
 
 	sys := BuildAgentSystemPrompt(a)
-	q := fmt.Sprintf("【委托任务】由智能体「%s」委托你执行。请直接完成下列任务并给出结果,不要反问调用方。\n\n%s",
+	q := fmt.Sprintf("【协作任务】由同事「%s」委托你执行。请直接完成下列任务并给出结果,不要反问调用方。\n\n%s",
 		caller.Name, strings.TrimSpace(taskBody))
 	// 授权弹窗挂到调用方会话;策略仍用被调方
 	permConv := caller.ConversationID
@@ -272,9 +282,9 @@ func buildSummaryQuestion(userTask string, results []InvokeResult) string {
 	var b strings.Builder
 	b.WriteString("用户原任务：\n")
 	b.WriteString(userTask)
-	b.WriteString("\n\n你已并行委托其他智能体，以下是各自隔离结果（勿混淆归属）。请分别汇总每个智能体做了什么、结果如何，并给出总体结论（已完成 / 部分完成 / 失败原因）。用简洁中文。\n\n")
+	b.WriteString("\n\n你已并行协作其他同事，以下是各自隔离结果（勿混淆归属）。请分别汇总每位同事做了什么、结果如何，并给出总体结论（已完成 / 部分完成 / 失败原因）。用简洁中文。\n\n")
 	for i, r := range results {
-		b.WriteString(fmt.Sprintf("### [%d] 智能体：%s (id=%d)\n", i+1, r.AgentName, r.AgentID))
+		b.WriteString(fmt.Sprintf("### [%d] 同事：%s (id=%d)\n", i+1, r.AgentName, r.AgentID))
 		if r.Err != "" {
 			b.WriteString("错误：")
 			b.WriteString(r.Err)
@@ -316,7 +326,7 @@ func (s *Service) writeInvokeDividersAsync(caller *store.ManagedAgent, userTask 
 }
 
 func (s *Service) summarizeForCallee(ctx context.Context, caller *store.ManagedAgent, userTask string, r InvokeResult) string {
-	prompt := fmt.Sprintf("用一两句中文总结：智能体「%s」委托「%s」完成了什么、结果如何。只输出摘要正文。\n任务：%s\n结果：%s\n错误：%s",
+	prompt := fmt.Sprintf("用一两句中文总结：同事「%s」委托「%s」完成了什么、结果如何。只输出摘要正文。\n任务：%s\n结果：%s\n错误：%s",
 		caller.Name, r.AgentName, truncate(userTask, 300), truncate(r.Content, 1500), r.Err)
 	out, _, err := s.runManagedEngine(ctx, caller, "你是摘要助手,只输出一两句中文摘要。", prompt, "", nil, nil, 0, 0, true, nil)
 	out = strings.TrimSpace(out)

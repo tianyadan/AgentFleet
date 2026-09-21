@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS conversations (
   user_ip     VARCHAR(64)   NOT NULL,
   mode       VARCHAR(16)    NOT NULL DEFAULT 'single',  -- single / chat
   agent_id   BIGINT        NULL,
+  engine_session_id     VARCHAR(128) NULL,
+  engine_used_tokens    BIGINT NOT NULL DEFAULT 0,
+  engine_window_tokens  BIGINT NOT NULL DEFAULT 0,
+  needs_system_reinject TINYINT NOT NULL DEFAULT 0,
   created_at DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -54,11 +58,13 @@ CREATE TABLE IF NOT EXISTS agent_folders (
 CREATE TABLE IF NOT EXISTS managed_agents (
   id              BIGINT         NOT NULL AUTO_INCREMENT,
   name            VARCHAR(128)   NOT NULL,
+  avatar_url      VARCHAR(512)   NULL,
   folder_id       BIGINT         NULL,
   engine          VARCHAR(32)    NOT NULL,           -- claude | codex | agent
   bin_path        VARCHAR(512)   NOT NULL DEFAULT '',
   rules_prompt    LONGTEXT       NULL,
   auto_review     TINYINT        NOT NULL DEFAULT 0,
+  task_plan_enabled TINYINT      NOT NULL DEFAULT 1,
   allow_write     TINYINT        NOT NULL DEFAULT 1,
   allow_network   TINYINT        NOT NULL DEFAULT 1,
   allow_rm        TINYINT        NOT NULL DEFAULT 0,
@@ -69,6 +75,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   schedule_label  VARCHAR(128)   NOT NULL DEFAULT '',
   status          VARCHAR(32)    NOT NULL DEFAULT 'idle', -- idle|running|waiting|error
   conversation_id BIGINT         NULL,
+  cloned_from_id  BIGINT         NULL,
   last_error      TEXT           NULL,
   last_run_ms     INT            NULL,
   run_started_at  DATETIME       NULL,
@@ -187,6 +194,20 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
   updated_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_updated (updated_at)
+) ENGINE=InnoDB;
+
+-- v0.2.23: 项目 × 数字员工持久协作会话
+CREATE TABLE IF NOT EXISTS workflow_agent_sessions (
+  id              BIGINT   NOT NULL AUTO_INCREMENT,
+  definition_id   BIGINT   NOT NULL,
+  agent_id        BIGINT   NOT NULL,
+  conversation_id BIGINT   NOT NULL,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_def_agent (definition_id, agent_id),
+  KEY idx_agent (agent_id),
+  CONSTRAINT fk_was_def FOREIGN KEY (definition_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS workflow_runs (

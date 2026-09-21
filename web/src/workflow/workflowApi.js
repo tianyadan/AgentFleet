@@ -30,12 +30,13 @@ export function workflowApi(authHeaders) {
       const r = await fetch(`${API}/admin/workflows/${id}`, { method: 'DELETE', headers: hdr() })
       return r.json()
     },
-    async start(id, input_prompt) {
+    async start(id, input_prompt, force_takeover = false) {
       const r = await fetch(`${API}/admin/workflows/${id}/runs`, {
         method: 'POST', headers: hdr({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ input_prompt }),
+        body: JSON.stringify({ input_prompt, force_takeover: !!force_takeover }),
       })
-      return r.json()
+      const d = await r.json()
+      return { ...d, _status: r.status }
     },
     async getRun(runId) {
       const r = await fetch(`${API}/admin/workflows/runs/${runId}`, { headers: hdr() })

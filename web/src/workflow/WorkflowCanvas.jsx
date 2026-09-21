@@ -31,7 +31,7 @@ function parseGraph(initialGraph) {
   }
 }
 
-/** 胶囊开关（编排设置） */
+/** 胶囊开关（协作设置） */
 function WfCapsuleToggle({ label, checked, onChange, hint }) {
   return (
     <div className="ma-capsule-row">
@@ -72,6 +72,28 @@ function WorkflowCanvasInner({
     setSettings(graph0.settings || {})
     undoRef.current = []
   }, [graph0, setNodes, setEdges])
+
+  // 打开编辑时按 agent_id 补齐 avatar_url / 名称 / 引擎
+  useEffect(() => {
+    if (!agents?.length) return
+    setNodes((ns) => ns.map((n) => {
+      if (n.type !== 'agent') return n
+      const aid = n.data?.agent_id
+      if (!aid) return n
+      const a = agents.find((x) => String(x.id) === String(aid))
+      if (!a) return n
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          agent_name: a.name || n.data.agent_name,
+          engine: a.engine || n.data.engine,
+          avatar_url: a.avatar_url || n.data.avatar_url || '',
+          label: a.name || n.data.label,
+        },
+      }
+    }))
+  }, [agents, setNodes])
 
   const pushUndo = useCallback(() => {
     const snap = {
@@ -130,6 +152,7 @@ function WorkflowCanvasInner({
           data.agent_name = a.name
           data.label = a.name
           data.engine = a.engine
+          data.avatar_url = a.avatar_url || ''
         }
       }
       return { ...n, data }
@@ -169,7 +192,7 @@ function WorkflowCanvasInner({
           className="wf-name-input"
           value={name}
           onChange={(e) => onChangeMeta?.({ name: e.target.value })}
-          placeholder="编排名称"
+          placeholder="协作名称"
         />
         <input
           className="wf-desc-input"
@@ -178,7 +201,7 @@ function WorkflowCanvasInner({
           placeholder="描述"
         />
         <button type="button" className="ghost" onClick={undo} title="Ctrl+Z">撤销</button>
-        <button type="button" className="ghost wf-icon-btn" onClick={() => setSettingsOpen(true)} title="编排设置">
+        <button type="button" className="ghost wf-icon-btn" onClick={() => setSettingsOpen(true)} title="协作设置">
           <IconSettings />
           <span>设置</span>
         </button>
@@ -243,13 +266,13 @@ function WorkflowCanvasInner({
       {settingsOpen && (
         <div className="modal-mask" onClick={() => setSettingsOpen(false)}>
           <div className="modal-card ma-settings" onClick={(e) => e.stopPropagation()}>
-            <h2>编排设置</h2>
-            <p className="muted">以下设置对整个团队编排生效。</p>
+            <h2>协作设置</h2>
+            <p className="muted">以下设置对整个项目协作生效。</p>
             <WfCapsuleToggle
               label="允许执行所有命令"
               checked={allowAll}
               onChange={(c) => setSettings((s) => ({ ...s, allow_all_commands: c }))}
-              hint="开启后，编排内所有命令自动放行且无需弹窗；rm 仍需人工确认。"
+              hint="开启后，协作内所有命令自动放行且无需弹窗；rm 仍需人工确认。"
             />
             <div className="modal-actions">
               <button type="button" onClick={() => setSettingsOpen(false)}>关闭</button>

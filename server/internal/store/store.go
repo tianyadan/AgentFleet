@@ -97,7 +97,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	); err != nil {
 		return err
 	}
-	// 4) v0.2.14 智能体文件夹
+	// 4) v0.2.14 数字员工工作组（表 agent_folders）
 	if _, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS agent_folders (
 		  id         BIGINT       NOT NULL AUTO_INCREMENT,
@@ -169,6 +169,70 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx,
 			`INSERT INTO schema_patches (id) VALUES ('v0.2.17-clear-claude-plan-session')`); err != nil {
 			return err
+		}
+	}
+	// 7) v0.2.20 任务规划开关
+	var taskPlanCol int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'task_plan_enabled'`,
+	).Scan(&taskPlanCol); err != nil {
+		return err
+	}
+	if taskPlanCol == 0 {
+		if _, err := s.db.ExecContext(ctx,
+			`ALTER TABLE managed_agents ADD COLUMN task_plan_enabled TINYINT NOT NULL DEFAULT 1 AFTER auto_review`,
+		); err != nil {
+			return err
+		}
+	}
+	// 8) v0.2.21 压缩后需重带系统提示
+	var reinjectCol int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations' AND COLUMN_NAME = 'needs_system_reinject'`,
+	).Scan(&reinjectCol); err != nil {
+		return err
+	}
+	if reinjectCol == 0 {
+		if _, err := s.db.ExecContext(ctx,
+			`ALTER TABLE conversations ADD COLUMN needs_system_reinject TINYINT NOT NULL DEFAULT 0`,
+		); err != nil {
+			return err
+		}
+	}
+	// 9) v0.2.23 项目协作持久会话（项目×数字员工）
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS workflow_agent_sessions (
+		  id              BIGINT   NOT NULL AUTO_INCREMENT,
+		  definition_id   BIGINT   NOT NULL,
+		  agent_id        BIGINT   NOT NULL,
+		  conversation_id BIGINT   NOT NULL,
+		  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		  PRIMARY KEY (id),
+		  UNIQUE KEY uk_def_agent (definition_id, agent_id),
+		  KEY idx_agent (agent_id),
+		  CONSTRAINT fk_was_def FOREIGN KEY (definition_id) REFERENCES workflow_definitions(id) ON DELETE CASCADE
+		) ENGINE=InnoDB`); err != nil {
+		return err
+	}
+	// 10) v0.2.24 复制数字员工：头像预留 + 来源 id
+	for _, col := range []struct{ name, ddl string }{
+		{"avatar_url", `ALTER TABLE managed_agents ADD COLUMN avatar_url VARCHAR(512) NULL AFTER name`},
+		{"cloned_from_id", `ALTER TABLE managed_agents ADD COLUMN cloned_from_id BIGINT NULL`},
+	} {
+		var n int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = ?`, col.name,
+		).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

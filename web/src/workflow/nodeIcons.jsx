@@ -1,4 +1,4 @@
-/** 团队编排节点工具栏 SVG 图标（无 emoji） */
+/** 项目协作节点工具栏 SVG 图标（无 emoji） */
 
 const svgProps = {
   width: 14,
@@ -95,6 +95,37 @@ export function IconFolder() {
   return (
     <svg {...svgProps}>
       <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    </svg>
+  )
+}
+
+/** 编辑铅笔 */
+export function IconEdit() {
+  return (
+    <svg {...svgProps}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  )
+}
+
+/** 删除/垃圾桶 */
+export function IconTrash() {
+  return (
+    <svg {...svgProps}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  )
+}
+
+/** 查看任务状态 */
+export function IconActivity() {
+  return (
+    <svg {...svgProps}>
+      <path d="M22 12h-4l-3 7-4-14-3 7H2" />
     </svg>
   )
 }

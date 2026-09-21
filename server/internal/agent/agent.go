@@ -68,7 +68,7 @@ type HookSpec struct {
 	TimeoutS      int    // hook 自身超时(需 > 用户等待时长)
 }
 
-// Settings 生成 --settings 的内联 JSON(注册 PreToolUse hook)。
+// Settings 生成 --settings 的内联 JSON(注册 PreToolUse + Pre/PostCompact hook)。
 // 无 hook 可执行文件时返回空串,调用方据此决定是否加该参数。
 func (h HookSpec) Settings() string {
 	if h.Bin == "" {
@@ -78,8 +78,14 @@ func (h HookSpec) Settings() string {
 	if to <= 0 {
 		to = 150
 	}
+	cmd := `{"type":"command","command":"` + jsonEscape(h.Bin) + `","timeout":` + itoa(to) + `}`
 	// allowUnsandboxedCommands:用户/AI 明确授权后 hook 可经 dangerouslyDisableSandbox 跳出沙箱。
-	s := `{"sandbox":{"allowUnsandboxedCommands":true},"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"` + jsonEscape(h.Bin) + `","timeout":` + itoa(to) + `}]}]}}`
+	// PreCompact/PostCompact：引擎自动或手动压缩时回调平台同步清库。
+	s := `{"sandbox":{"allowUnsandboxedCommands":true},"hooks":{` +
+		`"PreToolUse":[{"matcher":"","hooks":[` + cmd + `]}],` +
+		`"PreCompact":[{"matcher":"","hooks":[` + cmd + `]}],` +
+		`"PostCompact":[{"matcher":"","hooks":[` + cmd + `]}]` +
+		`}}`
 	return s
 }
 
@@ -130,23 +136,56 @@ func itoa64(n int64) string {
 	return string(buf[i:])
 }
 
-// streamLine 代表 stream-json 的一行事件。
-type streamLine struct {
-	Type  string `json:"type"`
-	Event struct {
-		Type  string `json:"type"`
-		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"delta"`
-	} `json:"event"`
-	Message *struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"message"`
-	Result string `json:"result"`
+// claudeLineText 从一行 stream-json 取出正文。
+// snapshot 表示整段快照（assistant/result），调用方仅在还没有增量时采用，避免和 text_delta 重复。
+// isResult 表示本轮 result 事件，用于关闭 stdin。
+func claudeLineText(line []byte) (text string, snapshot, isResult bool) {
+	var raw map[string]interface{}
+	if json.Unmarshal(line, &raw) != nil {
+		return "", false, false
+	}
+	switch strField(raw, "type") {
+	case "stream_event":
+		ev, _ := raw["event"].(map[string]interface{})
+		if strField(ev, "type") != "content_block_delta" {
+			return "", false, false
+		}
+		delta, _ := ev["delta"].(map[string]interface{})
+		if strField(delta, "type") != "text_delta" {
+			return "", false, false
+		}
+		return strField(delta, "text"), false, false
+	case "content_block_delta":
+		delta, _ := raw["delta"].(map[string]interface{})
+		if strField(delta, "type") != "text_delta" {
+			return "", false, false
+		}
+		return strField(delta, "text"), false, false
+	case "assistant":
+		msg, _ := raw["message"].(map[string]interface{})
+		return assistantMessageText(msg), true, false
+	case "result":
+		return strField(raw, "result"), true, true
+	default:
+		return "", false, false
+	}
+}
+
+// assistantMessageText 拼接 assistant 消息里的 text 块（跳过 thinking / tool_use）。
+func assistantMessageText(msg map[string]interface{}) string {
+	if msg == nil {
+		return ""
+	}
+	arr, _ := msg["content"].([]interface{})
+	var b strings.Builder
+	for _, it := range arr {
+		m, _ := it.(map[string]interface{})
+		if strField(m, "type") != "text" {
+			continue
+		}
+		b.WriteString(strField(m, "text"))
+	}
+	return b.String()
 }
 
 // AskStream 以 stream-json 真流式运行 claude -p。
@@ -184,6 +223,7 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 	}
 
 	cmd := exec.CommandContext(cctx, r.bin, args...)
+	AttachKillable(cmd)
 	cmd.Dir = dir
 	cmd.Env = CleanEnv(os.Environ())
 	if env := hook.Environ(); len(env) > 0 {
@@ -263,32 +303,20 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 				}
 			}
 		}
-		var sl streamLine
-		if err := json.Unmarshal([]byte(line), &sl); err != nil {
-			continue
-		}
-		if sl.Type == "stream_event" && sl.Event.Type == "content_block_delta" && sl.Event.Delta.Type == "text_delta" {
-			full.WriteString(sl.Event.Delta.Text)
-			if onChunk != nil {
-				onChunk(sl.Event.Delta.Text)
-			}
-		}
-		if sl.Type == "assistant" && sl.Message != nil {
-			for _, c := range sl.Message.Content {
-				if c.Type == "text" && c.Text != "" {
-					if full.Len() == 0 {
-						full.WriteString(c.Text)
-						if onChunk != nil {
-							onChunk(c.Text)
-						}
-					}
-				}
-			}
-		}
-		if sl.Type == "result" {
+		text, snapshot, isResult := claudeLineText([]byte(line))
+		if isResult {
 			sawResult = true
 			_ = stdin.Close()
-			continue
+		}
+		// 合成句「No response requested.」是 CLI 把本轮当成本地命令时的空转，不能当成正文，
+		// 否则后面的真回复快照会因为 full 非空被丢掉。
+		if text != "" && strings.TrimSpace(text) != "No response requested." {
+			if !snapshot || full.Len() == 0 {
+				full.WriteString(text)
+				if onChunk != nil {
+					onChunk(text)
+				}
+			}
 		}
 	}
 	scanErr := scanner.Err()

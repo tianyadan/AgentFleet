@@ -60,6 +60,13 @@ func (s *Service) FetchEngineContext(ctx context.Context, agentID int64, fresh b
 			return out, nil
 		}
 	}
+	// 对话进行中再 resume 同一 session 跑 /context，会把本地命令插进当前回合，
+	// Claude 会回 synthetic「No response requested.」而不回答用户。
+	if contextProbeBlocked(a.Status, s.agentRunActive(agentID)) {
+		out.Source = "cached"
+		out.Text = "对话进行中，已跳过 /context 探测以免打断当前回复。\n" + formatContextText(a, out)
+		return out, nil
+	}
 
 	bin := a.BinPath
 	if bin == "" {
@@ -158,6 +165,27 @@ func (s *Service) BuildAgentStatusReport(ctx context.Context, agentID int64) (st
 		return "", err
 	}
 	return c.Text, nil
+}
+
+// agentRunActive 该数字员工是否有进行中的 Ask。
+func (s *Service) agentRunActive(agentID int64) bool {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	_, ok := s.runs[agentID]
+	return ok
+}
+
+// contextProbeBlocked 运行中禁止再开一个 claude --resume /context。
+func contextProbeBlocked(status string, busy bool) bool {
+	if busy {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running", "waiting", "compressing", "initializing":
+		return true
+	default:
+		return false
+	}
 }
 
 // RememberEngineMeta 写入会话并刷新内存缓存。

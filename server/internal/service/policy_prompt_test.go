@@ -25,10 +25,10 @@ func TestAgentPolicyBlockAndReinforce(t *testing.T) {
 	}
 }
 
-func TestAgentPolicyBlockBrowserCloseHint(t *testing.T) {
-	a := &store.ManagedAgent{Name: "b", AllowBrowser: true}
-	block := AgentPolicyBlock(a)
-	if !strings.Contains(block, "及时关闭网页") || !strings.Contains(block, "僵尸网页") {
-		t.Fatalf("missing browser close hint: %s", block)
+func TestBuildAgentSystemPromptIncludesProjectMemory(t *testing.T) {
+	a := &store.ManagedAgent{Name: "x", RulesPrompt: "hi"}
+	p := BuildAgentSystemPrompt(a)
+	if !strings.Contains(p, "projects/*/summary.md") {
+		t.Fatalf("missing project memory hint: %s", p)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// AgentFolder 智能体文件夹。
+// AgentFolder 数字员工工作组（DB 表仍为 agent_folders）。
 type AgentFolder struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
@@ -14,7 +14,7 @@ type AgentFolder struct {
 	CreatedAt string `json:"created_at,omitempty"`
 }
 
-// ListAgentFolders 文件夹列表（排序号升序）。
+// ListAgentFolders 工作组列表（排序号升序）。
 func (s *Store) ListAgentFolders(ctx context.Context) ([]AgentFolder, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, sort_order, created_at FROM agent_folders ORDER BY sort_order ASC, id ASC`)
@@ -37,11 +37,11 @@ func (s *Store) ListAgentFolders(ctx context.Context) ([]AgentFolder, error) {
 	return out, rows.Err()
 }
 
-// CreateAgentFolder 创建空文件夹。
+// CreateAgentFolder 创建空工作组。
 func (s *Store) CreateAgentFolder(ctx context.Context, name string) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "新建文件夹"
+		name = "新建工作组"
 	}
 	var maxSort sql.NullInt64
 	_ = s.db.QueryRowContext(ctx, `SELECT MAX(sort_order) FROM agent_folders`).Scan(&maxSort)
@@ -54,7 +54,7 @@ func (s *Store) CreateAgentFolder(ctx context.Context, name string) (int64, erro
 	return res.LastInsertId()
 }
 
-// RenameAgentFolder 重命名文件夹。
+// RenameAgentFolder 重命名工作组。
 func (s *Store) RenameAgentFolder(ctx context.Context, id int64, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -71,7 +71,7 @@ func (s *Store) RenameAgentFolder(ctx context.Context, id int64, name string) er
 	return nil
 }
 
-// DeleteAgentFolder 删除文件夹并把其下智能体移到根目录。
+// DeleteAgentFolder 删除工作组并把其下数字员工移到未入组。
 func (s *Store) DeleteAgentFolder(ctx context.Context, id int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -92,7 +92,7 @@ func (s *Store) DeleteAgentFolder(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// SetManagedAgentFolder 将智能体放入文件夹；folderID=0 表示根目录。
+// SetManagedAgentFolder 将数字员工放入工作组；folderID=0 表示未入组。
 func (s *Store) SetManagedAgentFolder(ctx context.Context, agentID, folderID int64) error {
 	var arg any
 	if folderID > 0 {

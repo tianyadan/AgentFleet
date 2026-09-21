@@ -103,11 +103,16 @@ func (h *Handler) AdminWorkflowsDelete(c *gin.Context) {
 func (h *Handler) AdminWorkflowsStart(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	var body struct {
-		InputPrompt string `json:"input_prompt"`
+		InputPrompt   string `json:"input_prompt"`
+		ForceTakeover bool   `json:"force_takeover"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	run, err := h.svc.StartWorkflowRun(c.Request.Context(), id, strings.TrimSpace(body.InputPrompt))
+	run, err := h.svc.StartWorkflowRun(c.Request.Context(), id, strings.TrimSpace(body.InputPrompt), body.ForceTakeover)
 	if err != nil {
+		if ce, ok := err.(*service.WorkflowStartConflictError); ok {
+			c.JSON(http.StatusConflict, gin.H{"error": ce.Error(), "conflicts": ce.Conflicts})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -188,7 +193,7 @@ func (h *Handler) AdminWorkflowRunReview(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// AdminWorkflowPermissionPending 团队编排进行中节点的待授权列表。
+// AdminWorkflowPermissionPending 项目协作进行中节点的待授权列表。
 func (h *Handler) AdminWorkflowPermissionPending(c *gin.Context) {
 	ids, err := h.svc.Store.ListRunningNodeConversationIDs(c.Request.Context())
 	if err != nil {

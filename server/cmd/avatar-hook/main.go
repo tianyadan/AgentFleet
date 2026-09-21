@@ -1,7 +1,8 @@
-// avatar-hook 是 claude CLI 的 PreToolUse hook:把工具授权请求转发到数字分身后端,
-// 等真人前端点「同意/拒绝」后,再把裁决按 hook 协议打印回 stdout。
+// avatar-hook 是引擎 CLI 的 hook 桥：
+// 1) PreToolUse：把工具授权请求转发到数字分身后端，等真人前端裁决。
+// 2) PreCompact / PostCompact / preCompact：通知后端同步清库（平台对话历史）。
 //
-// 由后端 --settings 注入调用,输入为 stdin 上的 PreToolUse JSON。
+// 由后端 --settings / 工作区 hooks.json 注入，输入为 stdin 上的 hook JSON。
 package main
 
 import (
@@ -10,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -19,6 +21,7 @@ type hookInput struct {
 	ToolInput     map[string]interface{} `json:"tool_input"`
 	SessionID     string                 `json:"session_id"`
 	Cwd           string                 `json:"cwd"`
+	Trigger       string                 `json:"trigger"`
 }
 
 type decideReq struct {
@@ -39,6 +42,24 @@ func main() {
 	raw, _ := io.ReadAll(os.Stdin)
 	var in hookInput
 	_ = json.Unmarshal(raw, &in)
+
+	// Cursor 等可能用不同字段名
+	if in.HookEventName == "" {
+		var alt map[string]interface{}
+		if json.Unmarshal(raw, &alt) == nil {
+			if v, ok := alt["hook_event_name"].(string); ok {
+				in.HookEventName = v
+			} else if v, ok := alt["hookEventName"].(string); ok {
+				in.HookEventName = v
+			}
+		}
+	}
+
+	if isCompactEvent(in.HookEventName) {
+		notifyCompact(in)
+		emitEmpty()
+		return
+	}
 
 	// 无工具名:不表态,交回 CLI 默认策略。
 	if in.ToolName == "" {
@@ -84,6 +105,40 @@ func main() {
 		reason = "未获授权,已拒绝"
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(buildHookOutput("deny", reason, in.ToolName, in.ToolInput))
+}
+
+func isCompactEvent(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "PreCompact", "PostCompact", "preCompact":
+		return true
+	default:
+		return false
+	}
+}
+
+// notifyCompact 通知后端同步清库；失败不影响引擎压缩（仅打空响应）。
+func notifyCompact(in hookInput) {
+	base := os.Getenv("AVATAR_BACKEND_URL")
+	if base == "" {
+		base = "http://127.0.0.1:8080"
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"conversation_id": os.Getenv("AVATAR_CONV_ID"),
+		"session_id":      in.SessionID,
+		"trigger":         in.Trigger,
+		"hook_event_name": in.HookEventName,
+	})
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("POST", base+"/api/permissions/compact-sync", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 // buildHookOutput 按 PreToolUse 协议构造裁决。

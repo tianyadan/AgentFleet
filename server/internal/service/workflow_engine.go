@@ -24,14 +24,34 @@ func newWorkflowEngine(svc *Service) *WorkflowEngine {
 	return &WorkflowEngine{svc: svc, runs: map[int64]context.CancelFunc{}}
 }
 
-// StartWorkflowRun 创建并异步执行。
-func (s *Service) StartWorkflowRun(ctx context.Context, defID int64, prompt string) (*store.WorkflowRun, error) {
+// StartWorkflowRun 创建并异步执行。forceTakeover 为 true 时先打断冲突员工再启动。
+func (s *Service) StartWorkflowRun(ctx context.Context, defID int64, prompt string, forceTakeover bool) (*store.WorkflowRun, error) {
 	def, err := s.Store.GetWorkflowDefinition(ctx, defID)
 	if err != nil || def == nil {
 		return nil, fmt.Errorf("workflow not found")
 	}
-	if _, err := ParseWorkflowGraph(def.GraphJSON); err != nil {
+	g, err := ParseWorkflowGraph(def.GraphJSON)
+	if err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
+	}
+	agentIDs := CollectAgentIDsFromGraph(g)
+	if len(agentIDs) > 0 {
+		occMap, _ := s.Store.ListOccupancyMap(ctx)
+		names := map[int64]string{}
+		for id := range agentIDs {
+			if a, _ := s.Store.GetManagedAgent(ctx, id); a != nil {
+				names[id] = a.Name
+			}
+		}
+		conflicts := FilterStartConflicts(agentIDs, occMap, names)
+		if len(conflicts) > 0 {
+			if !forceTakeover {
+				return nil, &WorkflowStartConflictError{Conflicts: conflicts}
+			}
+			if err := s.forceTakeoverAgents(ctx, conflicts); err != nil {
+				return nil, err
+			}
+		}
 	}
 	runID, err := s.Store.CreateWorkflowRun(ctx, defID, prompt)
 	if err != nil {
@@ -59,7 +79,36 @@ func (s *Service) StartWorkflowRun(ctx context.Context, defID int64, prompt stri
 	return run, nil
 }
 
-// StopWorkflowRun 用户终止。
+// forceTakeoverAgents 停止冲突员工 Ask / 取消复制总结，并释放占用。
+func (s *Service) forceTakeoverAgents(ctx context.Context, conflicts []AgentConflict) error {
+	for _, c := range conflicts {
+		s.cancelCloneJob(c.AgentID)
+		s.StopManaged(c.AgentID)
+		_ = s.Store.ClearOccupancy(ctx, c.AgentID)
+		// 若有人以该员工为源正在 initializing，标记错误（可选扫描）
+		if c.Occupancy != nil && c.Occupancy.SourceType == SourceCloneInit {
+			// 源被打断：查找 cloned_from_id=c.AgentID 且 initializing 的副本
+			_ = s.markClonesInterruptedBySource(ctx, c.AgentID)
+		}
+	}
+	return nil
+}
+
+func (s *Service) markClonesInterruptedBySource(ctx context.Context, srcID int64) error {
+	items, err := s.Store.ListManagedAgents(ctx)
+	if err != nil {
+		return err
+	}
+	for _, a := range items {
+		if a.ClonedFromID == srcID && a.Status == AgentStatusInitializing {
+			_ = s.Store.SetManagedAgentStatus(ctx, a.ID, "error", "源被协作接管，总结中断", 0, a.ConversationID)
+			s.cancelCloneJob(a.ID)
+		}
+	}
+	return nil
+}
+
+// StopWorkflowRun 用户终止：取消工作流、杀掉占用中的数字员工 CLI 进程、释放占用。
 func (s *Service) StopWorkflowRun(runID int64) error {
 	s.WF.mu.Lock()
 	cancel, ok := s.WF.runs[runID]
@@ -68,6 +117,7 @@ func (s *Service) StopWorkflowRun(runID int64) error {
 		cancel()
 	}
 	ctx := context.Background()
+	s.stopWorkflowAgents(ctx, runID)
 	run, err := s.Store.GetWorkflowRun(ctx, runID)
 	if err != nil || run == nil {
 		return fmt.Errorf("run not found")
@@ -77,6 +127,23 @@ func (s *Service) StopWorkflowRun(runID int64) error {
 	}
 	// waiting_recovery 也允许用户终止
 	return s.Store.UpdateWorkflowRunStatus(ctx, runID, "stopped", run.FailNodeID, "用户终止", run.CurrentNodeIDsJSON, run.ProgressJSON, run.ParallelStateJSON)
+}
+
+// stopWorkflowAgents 终止该 run 仍在工作的数字员工进程并标记节点停止。
+func (s *Service) stopWorkflowAgents(ctx context.Context, runID int64) {
+	occ, _ := s.Store.ListOccupancyMap(ctx)
+	nes, _ := s.Store.ListNodeExecutions(ctx, runID)
+	for _, agentID := range CollectWorkflowStopAgentIDs(runID, occ, nes) {
+		s.StopManaged(agentID)
+	}
+	for _, ne := range nes {
+		if ne.ConversationID > 0 {
+			s.Perms.DropByConv(ne.ConversationID)
+		}
+		if ne.Status == "running" || (ne.Status == "waiting" && ne.NodeType == "agent") {
+			_ = s.Store.UpdateNodeExecution(ctx, ne.ID, "stopped", `{"status":"FAIL"}`, "用户终止工作流", ne.ConversationID)
+		}
+	}
 }
 
 func (e *WorkflowEngine) execute(ctx context.Context, runID int64) error {
@@ -380,6 +447,9 @@ func (e *WorkflowEngine) runAgent(ctx context.Context, runID, defID int64, defNa
 	if err != nil || a == nil {
 		return nil, fmt.Errorf("agent %d not found", agentID)
 	}
+	if err := GuardAgentUsable(a); err != nil {
+		return nil, err
+	}
 	attempt, _ := e.svc.Store.NextNodeAttempt(ctx, runID, n.ID)
 	ne := &store.NodeExecution{
 		RunID: runID, NodeID: n.ID, Attempt: attempt, NodeType: "agent", AgentID: agentID, Status: "running",
@@ -397,19 +467,23 @@ func (e *WorkflowEngine) runAgent(ctx context.Context, runID, defID int64, defNa
 		TaskName: truncate(prompt, 120),
 	}
 	if err := e.svc.TryAcquireOccupancy(ctx, occ); err != nil {
-		_ = e.svc.Store.UpdateNodeExecution(ctx, execID, "failed", "", err.Error(), 0)
-		return nil, err
+		msg := err.Error()
+		if be, ok := err.(*OccupancyBusyError); ok && be.Occ != nil {
+			msg = fmt.Sprintf("数字员工忙碌（%s），请终止管理台对话后重试本节点，或重新启动协作并选择执行团队任务", be.Occ.SourceType)
+		}
+		_ = e.svc.Store.UpdateNodeExecution(ctx, execID, "failed", "", msg, 0)
+		return nil, fmt.Errorf("%s", msg)
 	}
 	defer e.svc.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
-	convID, err := e.svc.Store.CreateAgentConversation(ctx, agentID)
+	convID, err := e.svc.GetOrCreateWorkflowAgentConversation(ctx, defID, agentID)
 	if err != nil {
 		_ = e.svc.Store.UpdateNodeExecution(ctx, execID, "failed", "", err.Error(), 0)
 		return nil, err
 	}
 	// 尽早挂上 conversation，便于前端拉权限
 	_ = e.svc.Store.UpdateNodeExecution(ctx, execID, "running", store.MustJSON(map[string]any{
-		"status": "RUNNING", "summary": "智能体执行中…",
+		"status": "RUNNING", "summary": "数字员工执行中…",
 	}), "", convID)
 
 	// 节点级「命令自动审核」：开启后本会话走 AI 自动放行（敏感命令仍会 Ask）
@@ -496,7 +570,13 @@ func (e *WorkflowEngine) runAgent(ctx context.Context, runID, defID int64, defNa
 	if askErr != nil {
 		evBuf.Add(map[string]any{"type": "error", "summary": askErr.Error(), "at": time.Now().UnixMilli()})
 		evBuf.Flush(context.WithoutCancel(ctx))
-		_ = e.svc.Store.UpdateNodeExecution(ctx, execID, "failed", store.MustJSON(map[string]any{"text": text, "status": "FAIL"}), askErr.Error(), convID)
+		st := "failed"
+		errText := askErr.Error()
+		if ctx.Err() != nil {
+			st = "stopped"
+			errText = "用户终止工作流"
+		}
+		_ = e.svc.Store.UpdateNodeExecution(context.WithoutCancel(ctx), execID, st, store.MustJSON(map[string]any{"text": text, "status": "FAIL"}), errText, convID)
 		return nil, askErr
 	}
 	status := inferPassFail(text)
@@ -723,6 +803,13 @@ func (s *Service) ReviewWorkflowRun(ctx context.Context, runID int64, action, re
 
 	switch strings.ToLower(action) {
 	case "abort", "stop":
+		s.WF.mu.Lock()
+		cancel, ok := s.WF.runs[runID]
+		s.WF.mu.Unlock()
+		if ok && cancel != nil {
+			cancel()
+		}
+		s.stopWorkflowAgents(ctx, runID)
 		_ = s.Store.UpdateNodeExecution(ctx, waiting.ID, "stopped", `{"status":"FAIL"}`, "用户终止", 0)
 		return s.Store.UpdateWorkflowRunStatus(ctx, runID, "stopped", waiting.NodeID, "用户终止审核", `[]`, `{}`, `{}`)
 	case "reject":

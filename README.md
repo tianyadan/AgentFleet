@@ -76,8 +76,13 @@ Set via environment (defaults are also applied in `scripts/start.sh`). **Overrid
 | `AVATAR_BARK_NOTIFY` | Push pending-permission alerts | `1` |
 | `AVATAR_NOTIFY_SCRIPT` | Bark helper script | `scripts/notify-permission.sh` |
 | `BARK_KEY` | Bark device key (if notify enabled) | _(optional)_ |
+| `AVATAR_OSS_ENDPOINT` | Aliyun OSS endpoint (upload) | e.g. `oss-cn-qingdao.aliyuncs.com` |
+| `AVATAR_OSS_ACCESS_KEY_ID` / `AVATAR_OSS_ACCESS_KEY_SECRET` | OSS credentials | _(in local `.env` only)_ |
+| `AVATAR_OSS_BUCKET` | OSS bucket | `digital-employee-qd` |
+| `AVATAR_OSS_PREFIX` | Object key prefix | `avatars/` |
+| `AVATAR_OSS_PUBLIC_BASE` | Public URL base (CNAME) | e.g. `https://digital-employee-qd.cn-qingdao.taihangcda.cn` |
 
-Database name / Docker volume still use the historical `colleague_avatar` identifiers; the product name is **AgentFleet**.
+Copy `.env.example` → `.env` for local secrets. `scripts/start.sh` auto-loads `.env`.
 
 ## Permission flow
 

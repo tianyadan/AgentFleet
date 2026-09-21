@@ -142,6 +142,7 @@ func ParseCursorPrintOutput(raw string) (text string, meta RunMeta) {
 
 func runOnce(ctx context.Context, bin, dir string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}

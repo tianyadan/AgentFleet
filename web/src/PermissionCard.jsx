@@ -44,7 +44,7 @@ export function CmdBlock({ content, risk, meaning, decision }) {
 }
 
 /**
- * 权限授权卡（Agent 对话 / 团队编排共用）：风险色 + 中文解释 + 同意/拒绝。
+ * 权限授权卡（数字员工对话 / 项目协作共用）：风险色 + 中文解释 + 同意/拒绝。
  */
 export function PermissionCard({ p, more = 0, busy, onDecide, title }) {
   const [, setTick] = useState(0)

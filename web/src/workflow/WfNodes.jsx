@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { Handle, Position } from '@xyflow/react'
+import { agentAvatarUrl } from '../agentAvatar.js'
 
 const ENGINE_CLASS = {
   claude: 'eng-claude',
@@ -14,13 +15,21 @@ function WfNodeInner({ data, type }) {
   const eng = String(data?.engine || '').toLowerCase()
   const engCls = type === 'agent' ? (ENGINE_CLASS[eng] || 'eng-unknown') : ''
   const runSt = data?.runStatus
+  const showAvatar = type === 'agent' && !!data?.agent_id
   return (
     <div className={`wf-node wf-node-${type} ${engCls} ${runSt ? `run-${runSt}` : ''}`.trim()}>
       <Handle type="target" position={Position.Left} />
-      <strong>{label}</strong>
-      {sub ? <span className="wf-node-sub">{String(sub).slice(0, 48)}</span> : null}
-      {type === 'agent' && eng ? <span className="wf-node-eng">{eng}</span> : null}
-      {runSt ? <span className={`wf-status-chip st-${runSt}`}>{statusZh(runSt)}</span> : null}
+      <div className="wf-node-body">
+        {showAvatar && (
+          <img className="wf-node-avatar" src={agentAvatarUrl(data)} alt="" />
+        )}
+        <div className="wf-node-text">
+          <strong>{label}</strong>
+          {sub ? <span className="wf-node-sub">{String(sub).slice(0, 48)}</span> : null}
+          {type === 'agent' && eng ? <span className="wf-node-eng">{eng}</span> : null}
+          {runSt ? <span className={`wf-status-chip st-${runSt}`}>{statusZh(runSt)}</span> : null}
+        </div>
+      </div>
       {type === 'condition' && (
         <>
           <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} />

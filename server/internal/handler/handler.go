@@ -44,13 +44,14 @@ func (h *Handler) Register(r *gin.Engine) {
 		// 公开:对话必需
 		api.POST("/question", h.Question)
 		api.POST("/conversations", h.CreateConversation)
+		api.POST("/conversations/:id/compress", h.ConversationCompress)
 		api.GET("/workspaces", h.Workspaces)
 		// 多 Agent 上报/查询保持公开(外部 agent 与 E-bot 经 curl 调用)
 		api.POST("/agents/tasks", h.AgentTaskReport)
 		api.GET("/agents/tasks", h.AgentTaskList)
 		api.GET("/agents/task-types", h.AgentTaskTypes)
 
-		// 需 JWT:历史 / 统计 / 命令清单 / 管理型智能体
+		// 需 JWT:历史 / 统计 / 命令清单 / 数字员工
 		adm := api.Group("")
 		adm.Use(auth.RequireAdminJWT(h.svc.Cfg.JWTSecret))
 		{
@@ -63,6 +64,10 @@ func (h *Handler) Register(r *gin.Engine) {
 
 			adm.GET("/admin/agents", h.AdminAgentsList)
 			adm.POST("/admin/agents", h.AdminAgentsCreate)
+			adm.POST("/admin/agents/:id/copy", h.AdminAgentsCopy)
+			adm.POST("/admin/agents/:id/retry-init", h.AdminAgentsRetryInit)
+			adm.POST("/admin/agents/:id/avatar", h.AdminAgentsUploadAvatar)
+			adm.DELETE("/admin/agents/:id/avatar", h.AdminAgentsClearAvatar)
 			adm.PATCH("/admin/agents/:id", h.AdminAgentsUpdate)
 			adm.DELETE("/admin/agents/:id", h.AdminAgentsDelete)
 			adm.GET("/admin/agents/:id/messages", h.AdminAgentsMessages)
@@ -72,9 +77,10 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.POST("/admin/agents/:id/folder", h.AdminAgentsSetFolder)
 			adm.POST("/admin/agents/:id/ask", h.AdminAgentsAsk)
 			adm.POST("/admin/agents/:id/stop", h.AdminAgentsStop)
+			adm.POST("/admin/agents/:id/ensure-conversation", h.AdminAgentsEnsureConversation)
 			adm.POST("/admin/agents/:id/clear", h.AdminAgentsClear)
-			adm.POST("/admin/agents/:id/new", h.AdminAgentsNew)
 			adm.POST("/admin/agents/:id/compress", h.AdminAgentsCompress)
+			adm.POST("/admin/agents/:id/task-plan", h.AdminAgentsTaskPlan)
 			adm.GET("/admin/agents/:id/tasks", h.AdminAgentsTasks)
 			adm.GET("/admin/agents/:id/command-audits", h.AdminAgentsCommandAudits)
 			adm.POST("/admin/agents/notify-permission", h.AdminNotifyPermission)
@@ -127,6 +133,7 @@ func (h *Handler) Register(r *gin.Engine) {
 		perm.GET("/pending", h.PermissionPending)
 		perm.POST("/decide", h.PermissionDecide)
 		perm.POST("/auto", h.PermissionAuto)
+		perm.POST("/compact-sync", h.PermissionCompactSync)
 	}
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 }
@@ -407,8 +414,54 @@ func (h *Handler) PermissionRequest(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"behavior": string(dec.Behavior), "reason": dec.Reason})
 }
 
+// PermissionCompactSync 由 avatar-hook 在 Pre/PostCompact 时调用：同步清库并写系统提示。
+func (h *Handler) PermissionCompactSync(c *gin.Context) {
+	var body struct {
+		ConvID        string `json:"conversation_id"`
+		SessionID     string `json:"session_id"`
+		Trigger       string `json:"trigger"`
+		HookEventName string `json:"hook_event_name"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	convID, _ := strconv.ParseInt(body.ConvID, 10, 64)
+	if convID <= 0 {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "skipped": true})
+		return
+	}
+	// PostCompact / preCompact 都做幂等同步；PreCompact 也同步以免仅 Pre 触发时漏清
+	if err := h.svc.SyncPlatformAfterCompact(c.Request.Context(), convID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "trigger": body.Trigger, "hook": body.HookEventName, "session_id": body.SessionID})
+}
+
+// ConversationCompress E-bot 长对话：引擎原生压缩 + 清库。
+func (h *Handler) ConversationCompress(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	ok, err := h.svc.Store.ConversationExists(c.Request.Context(), id, h.clientIP(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	// E-bot 使用配置的 Claude CLI
+	bin := h.svc.Cfg.ClaudeBin
+	if err := h.svc.CompressConversation(c.Request.Context(), id, "claude", bin, h.svc.Cfg.WorkspaceRoot); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // PermissionPending 返回挂起中的授权(前端重连补齐)。query: conversation_id?
-// 管理台 JWT 可见所有挂起项(含 user_ip=admin 的智能体/工作流会话)；匿名仍按 ClientIP 过滤。
+// 管理台 JWT 可见所有挂起项(含 user_ip=admin 的数字员工/项目协作会话)；匿名仍按 ClientIP 过滤。
 func (h *Handler) PermissionPending(c *gin.Context) {
 	convID, _ := strconv.ParseInt(c.Query("conversation_id"), 10, 64)
 	list := h.svc.Perms.Pending(convID)
@@ -480,7 +533,7 @@ func (h *Handler) PermissionAuto(c *gin.Context) {
 		return
 	}
 	h.svc.Perms.SetAuto(body.ConversationID, body.Enabled)
-	// 管理台智能体:持久化到 managed_agents,刷新/重启后仍生效
+	// 管理台数字员工:持久化到 managed_agents,刷新/重启后仍生效
 	if agentID, _ := h.svc.Store.ConversationAgentID(c.Request.Context(), body.ConversationID); agentID > 0 {
 		_ = h.svc.Store.SetManagedAgentAutoReview(c.Request.Context(), agentID, body.Enabled)
 	}

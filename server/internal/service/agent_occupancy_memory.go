@@ -9,11 +9,20 @@ import (
 )
 
 const (
-	SourceDirect   = "DIRECT"
-	SourceWorkflow = "WORKFLOW"
-	SourceInvoke   = "INVOKE"
-	SourceSchedule = "SCHEDULE"
+	SourceDirect    = "DIRECT"
+	SourceWorkflow  = "WORKFLOW"
+	SourceInvoke    = "INVOKE"
+	SourceSchedule  = "SCHEDULE"
+	SourceCloneInit = "CLONE_INIT" // 复制时源员工正在静默总结
 )
+
+// OccupancyBlocksUserChat 非普通对话占用时，禁止用户提问（含复制初始化总结）。
+func OccupancyBlocksUserChat(occ *store.Occupancy) bool {
+	if occ == nil {
+		return false
+	}
+	return occ.SourceType != SourceDirect
+}
 
 // OccupancyBusyError 主任务冲突。
 type OccupancyBusyError struct {

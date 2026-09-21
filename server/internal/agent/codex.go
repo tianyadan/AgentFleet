@@ -169,6 +169,11 @@ func CodexAsk(ctx context.Context, bin, dir, systemPrompt, question, history str
 
 // CodexAskMeta 同 CodexAsk，额外支持用量/会话回调、resume 与命令时间线。
 func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn) (string, int, error) {
+	return CodexAskMetaEx(ctx, bin, dir, systemPrompt, question, history, onChunk, timeout, onActivity, onMeta, resumeThread, onCommand, nil)
+}
+
+// CodexAskMetaEx 增加 onCompact：JSONL 出现压缩事件时回调（用于平台清库同步）。
+func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, history string, onChunk func(string), timeout time.Duration, onActivity ActivityFn, onMeta MetaFn, resumeThread string, onCommand CodexCommandFn, onCompact func()) (string, int, error) {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -195,12 +200,14 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 	if rs := strings.TrimSpace(resumeThread); rs != "" {
 		args = []string{
 			"exec", "--json", "--skip-git-repo-check", "-s", "workspace-write",
+			"--dangerously-bypass-hook-trust",
 			"resume", rs, prompt,
 		}
 		if strings.TrimSpace(dir) != "" {
 			// -C 需在 resume 子命令前
 			args = []string{
 				"exec", "--json", "--skip-git-repo-check", "-s", "workspace-write",
+				"--dangerously-bypass-hook-trust",
 				"-C", dir, "resume", rs, prompt,
 			}
 		}
@@ -208,7 +215,7 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 		args = CodexArgs(dir, prompt, true)
 	}
 
-	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand)
+	text, meta, err := runCodexJSONStream(cctx, bin, dir, args, onChunk, onActivity, onMeta, onCommand, onCompact)
 	if err == nil {
 		return text, int(time.Since(start).Milliseconds()), nil
 	}
@@ -218,6 +225,7 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 	}
 	fallbackArgs := CodexArgs(dir, prompt, false)
 	cmd := exec.CommandContext(cctx, bin, fallbackArgs...)
+	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -250,9 +258,10 @@ func CodexAskMeta(ctx context.Context, bin, dir, systemPrompt, question, history
 
 func runCodexJSONStream(
 	ctx context.Context, bin, dir string, args []string,
-	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onCommand CodexCommandFn,
+	onChunk func(string), onActivity ActivityFn, onMeta MetaFn, onCommand CodexCommandFn, onCompact func(),
 ) (string, RunMeta, error) {
 	cmd := exec.CommandContext(ctx, bin, args...)
+	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -274,12 +283,18 @@ func runCodexJSONStream(
 	lastAct := ""
 	sawJSON := false
 	msgCount := 0
+	compacted := false
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
+		}
+		if IsCodexCompactionLine(line) {
+			sawJSON = true
+			compacted = true
+			// 延后到流结束后再 Sync，避免压缩事件夹在 agent_message 之后把 UI/库清掉
 		}
 		ev, ok := ParseCodexJSONLLine(line)
 		if !ok {
@@ -340,6 +355,9 @@ func runCodexJSONStream(
 	}
 	if onMeta != nil && (lastMeta.SessionID != "" || lastMeta.InputTokens > 0) {
 		onMeta(lastMeta)
+	}
+	if compacted && onCompact != nil {
+		onCompact()
 	}
 	return full.String(), lastMeta, nil
 }

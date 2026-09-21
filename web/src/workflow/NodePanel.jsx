@@ -18,7 +18,7 @@ export default function NodePanel({ node, agents = [], onChange, onClose, runExe
       {node.type === 'agent' && (
         <>
           <label>
-            智能体
+            数字员工
             <select
               value={d.agent_id || ''}
               onChange={(e) => onChange({ agent_id: Number(e.target.value) || 0 })}
@@ -35,7 +35,7 @@ export default function NodePanel({ node, agents = [], onChange, onClose, runExe
               rows={6}
               value={d.role_hint || ''}
               onChange={(e) => onChange({ role_hint: e.target.value })}
-              placeholder="该智能体在本节点的职责与提示词…"
+              placeholder="该数字员工在本节点的职责与提示词…"
             />
           </label>
           <div className="ma-capsule-row">
@@ -81,16 +81,27 @@ export default function NodePanel({ node, agents = [], onChange, onClose, runExe
         </label>
       )}
       {node.type === 'merge' && (
-        <label>
-          等待节点 IDs（逗号分隔，可空=全部入边）
-          <input
-            value={(d.wait_for_node_ids || []).join?.(',') || d.wait_for_csv || ''}
-            onChange={(e) => onChange({
-              wait_for_csv: e.target.value,
-              wait_for_node_ids: e.target.value.split(/[,，\s]+/).filter(Boolean),
-            })}
-          />
-        </label>
+        <>
+          <div className="wf-node-help">
+            <p className="wf-help-title">使用说明</p>
+            <ul className="wf-help-list">
+              <li>放在并行分支之后，等待多条入边都成功后再往下走。</li>
+              <li>左侧有多个连接点，可分别接各并行分支的输出。</li>
+              <li>「等待节点 IDs」可空：表示等待全部入边节点成功；填写则只等待指定节点。</li>
+              <li>典型用法：Parallel 拆出 A/B → 各自 Agent → Merge 汇合 → 后续节点。</li>
+            </ul>
+          </div>
+          <label>
+            等待节点 IDs（逗号分隔，可空=全部入边）
+            <input
+              value={(d.wait_for_node_ids || []).join?.(',') || d.wait_for_csv || ''}
+              onChange={(e) => onChange({
+                wait_for_csv: e.target.value,
+                wait_for_node_ids: e.target.value.split(/[,，\s]+/).filter(Boolean),
+              })}
+            />
+          </label>
+        </>
       )}
       {runExec && (
         <div className="wf-exec-box">

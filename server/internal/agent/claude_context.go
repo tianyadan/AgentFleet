@@ -29,6 +29,7 @@ func ClaudeProbeContext(ctx context.Context, bin, dir, sessionID string, timeout
 
 	args := []string{"-p", "--resume", sessionID, "--output-format", "stream-json", "--verbose", "/context"}
 	cmd := exec.CommandContext(cctx, bin, args...)
+	AttachKillable(cmd)
 	if dir != "" {
 		cmd.Dir = dir
 	}

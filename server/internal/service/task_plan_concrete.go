@@ -82,7 +82,7 @@ func HeuristicPlanSteps(question string, callees []AgentRef) []string {
 		steps = append(steps, "整合「"+name+"」返回的专项结果")
 	}
 	if len(callees) > 0 {
-		steps = append(steps, "汇总各智能体产出并给出明确结论")
+		steps = append(steps, "汇总各位同事产出并给出明确结论")
 	} else {
 		steps = append(steps, "核对结果是否满足要求后回复用户")
 	}
@@ -163,14 +163,14 @@ func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent,
 	b.WriteString("要求：每步写清动作与对象；禁止「正在规划/正在执行/正在输出结果/理解需求/整理回复」等空话。\n")
 	b.WriteString("只输出 JSON 字符串数组，例如 [\"查阅 xx 配置\",\"修改 yy 函数\",...]。\n")
 	if len(callees) > 0 {
-		b.WriteString("其中会委托其他智能体：")
+		b.WriteString("其中会协作其他同事：")
 		for i, c := range callees {
 			if i > 0 {
 				b.WriteString("、")
 			}
 			b.WriteString(c.Name)
 		}
-		b.WriteString("。步骤里可包含「等待/整合某智能体结果」。\n")
+		b.WriteString("。步骤里可包含「等待/整合某位同事结果」。\n")
 	}
 	b.WriteString("任务：\n")
 	b.WriteString(question)

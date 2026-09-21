@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"colleague-avatar/server/internal/store"
@@ -41,8 +42,18 @@ func (s *Service) UpdateWorkflow(ctx context.Context, id int64, name, desc, grap
 	return s.Store.GetWorkflowDefinition(ctx, id)
 }
 
-// DeleteWorkflow 删除。
+// DeleteWorkflow 解散项目：先归档各员工协作记忆到工作区 projects/，再删定义。
 func (s *Service) DeleteWorkflow(ctx context.Context, id int64) error {
+	def, err := s.Store.GetWorkflowDefinition(ctx, id)
+	if err != nil {
+		return err
+	}
+	if def != nil {
+		if archErr := s.ArchiveWorkflowProjectMemories(ctx, def); archErr != nil {
+			log.Printf("workflow %d archive memories: %v", id, archErr)
+		}
+		_ = s.Store.DeleteWorkflowAgentSessions(ctx, id)
+	}
 	return s.Store.DeleteWorkflowDefinition(ctx, id)
 }
 

@@ -8,15 +8,17 @@ import (
 	"time"
 )
 
-// ManagedAgent 管理台注册的智能体。
+// ManagedAgent 管理台注册的数字员工（API/表名仍为 agent）。
 type ManagedAgent struct {
 	ID              int64      `json:"id"`
 	Name            string     `json:"name"`
+	AvatarURL       string     `json:"avatar_url"`
 	FolderID        int64      `json:"folder_id"` // 0=根目录
 	Engine          string     `json:"engine"`    // claude | codex | agent
 	BinPath         string     `json:"bin_path"`
 	RulesPrompt     string     `json:"rules_prompt"`
 	AutoReview      bool       `json:"auto_review"`
+	TaskPlanEnabled bool       `json:"task_plan_enabled"` // 默认 true：Ask 前 AI 拆分步骤
 	AllowWrite      bool       `json:"allow_write"`
 	AllowNetwork    bool       `json:"allow_network"`
 	AllowRm         bool       `json:"allow_rm"`
@@ -27,6 +29,7 @@ type ManagedAgent struct {
 	ScheduleLabel   string     `json:"schedule_label"`
 	Status          string     `json:"status"`
 	ConversationID  int64      `json:"conversation_id"`
+	ClonedFromID    int64      `json:"cloned_from_id"`
 	LastError       string     `json:"last_error"`
 	LastRunMs       int        `json:"last_run_ms"`
 	RunStartedAt    *time.Time `json:"run_started_at,omitempty"`
@@ -34,7 +37,7 @@ type ManagedAgent struct {
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
-// ManagedAgentInput 创建/更新智能体入参。
+// ManagedAgentInput 招聘/更新数字员工入参。
 type ManagedAgentInput struct {
 	Name            string
 	Engine          string
@@ -87,16 +90,17 @@ func scanManagedAgent(scanner interface {
 }) (ManagedAgent, error) {
 	var a ManagedAgent
 	var runAt sql.NullTime
-	var auto, aw, an, ar, ab, se int
+	var auto, tp, aw, an, ar, ab, se int
 	err := scanner.Scan(
-		&a.ID, &a.Name, &a.FolderID, &a.Engine, &a.BinPath, &a.RulesPrompt, &auto,
+		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.BinPath, &a.RulesPrompt, &auto, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
-		&a.Status, &a.ConversationID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.Status, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
 		return a, err
 	}
 	a.AutoReview = auto != 0
+	a.TaskPlanEnabled = tp != 0
 	a.AllowWrite = aw != 0
 	a.AllowNetwork = an != 0
 	a.AllowRm = ar != 0
@@ -109,13 +113,14 @@ func scanManagedAgent(scanner interface {
 	return a, nil
 }
 
-const managedSelectCols = `id, name, IFNULL(folder_id,0), engine, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
+const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(folder_id,0), engine, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
+		IFNULL(task_plan_enabled,1),
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
-		status, IFNULL(conversation_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
+		status, IFNULL(conversation_id,0), IFNULL(cloned_from_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
 		run_started_at, created_at, updated_at`
 
-// ListManagedAgents 全部智能体(最新更新在前)。
+// ListManagedAgents 全部数字员工(最新更新在前)。
 func (s *Store) ListManagedAgents(ctx context.Context) ([]ManagedAgent, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+managedSelectCols+` FROM managed_agents ORDER BY updated_at DESC, id DESC`)
@@ -134,7 +139,7 @@ func (s *Store) ListManagedAgents(ctx context.Context) ([]ManagedAgent, error) {
 	return out, rows.Err()
 }
 
-// ListScheduledAgents 已开启定时的智能体。
+// ListScheduledAgents 已开启定时的数字员工。
 func (s *Store) ListScheduledAgents(ctx context.Context) ([]ManagedAgent, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+managedSelectCols+` FROM managed_agents
@@ -167,7 +172,7 @@ func (s *Store) GetManagedAgent(ctx context.Context, id int64) (*ManagedAgent, e
 	return &a, nil
 }
 
-// CreateManagedAgent 创建智能体(含权限策略)。
+// CreateManagedAgent 招聘数字员工(含权限策略)。
 func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (int64, error) {
 	engine := strings.ToLower(strings.TrimSpace(in.Engine))
 	binPath := strings.TrimSpace(in.BinPath)
@@ -214,7 +219,49 @@ func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (i
 	return res.LastInsertId()
 }
 
-// UpdateManagedAgent 更新智能体;in 中指针字段非 nil 才覆盖,Name/BinPath/RulesPrompt 用 Has* 由 handler 填满后直接写。
+// InsertClonedManagedAgent 插入复制员工（不定时任务；status 由调用方给定）。
+func (s *Store) InsertClonedManagedAgent(ctx context.Context, a ManagedAgent) (int64, error) {
+	engine := strings.ToLower(strings.TrimSpace(a.Engine))
+	binPath := strings.TrimSpace(a.BinPath)
+	if binPath == "" {
+		binPath = DefaultBin(engine)
+	}
+	st := strings.TrimSpace(a.Status)
+	if st == "" {
+		st = "idle"
+	}
+	var folder any
+	if a.FolderID > 0 {
+		folder = a.FolderID
+	}
+	var cloned any
+	if a.ClonedFromID > 0 {
+		cloned = a.ClonedFromID
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO managed_agents
+		 (name, avatar_url, folder_id, engine, bin_path, rules_prompt, auto_review, task_plan_enabled,
+		  allow_write, allow_network, allow_rm, allow_browser, workspace_path,
+		  schedule_enabled, schedule_cron, schedule_label, status, conversation_id, cloned_from_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.Name, nullIfEmpty(a.AvatarURL), folder, engine, binPath, a.RulesPrompt,
+		bool01(a.AutoReview), bool01(a.TaskPlanEnabled),
+		bool01(a.AllowWrite), bool01(a.AllowNetwork), bool01(a.AllowRm), bool01(a.AllowBrowser),
+		a.WorkspacePath, 0, "", "", st, nil, cloned)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func nullIfEmpty(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
+}
+
+// UpdateManagedAgent 更新数字员工;in 中指针字段非 nil 才覆盖,Name/BinPath/RulesPrompt 用 Has* 由 handler 填满后直接写。
 // 约定:handler 保存设置时传入完整合并后的 Name/BinPath/RulesPrompt 与全部策略指针。
 func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgentInput) error {
 	a, err := s.GetManagedAgent(ctx, id)
@@ -273,6 +320,19 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	return err
 }
 
+// SetManagedAgentTaskPlan 持久化任务规划开关（默认开）。
+func (s *Store) SetManagedAgentTaskPlan(ctx context.Context, id int64, enabled bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET task_plan_enabled=? WHERE id=?`, bool01(enabled), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SetManagedAgentAutoReview 持久化 AI 自动审核开关。
 func (s *Store) SetManagedAgentAutoReview(ctx context.Context, id int64, enabled bool) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET auto_review=? WHERE id=?`, bool01(enabled), id)
@@ -294,7 +354,7 @@ func (s *Store) CountUserMessages(ctx context.Context, conversationID int64) (in
 	return n, err
 }
 
-// DeleteManagedAgent 删除智能体及其会话消息。
+// DeleteManagedAgent 解聘数字员工及其会话消息。
 func (s *Store) DeleteManagedAgent(ctx context.Context, id int64) error {
 	a, err := s.GetManagedAgent(ctx, id)
 	if err != nil {
@@ -322,11 +382,13 @@ func (s *Store) DeleteManagedAgent(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// SetManagedAgentStatus 更新运行状态;running 时记录 run_started_at,结束时清空。
+// SetManagedAgentStatus 更新运行状态。
+// running / compressing 视为工作中：保留已有 run_started_at，否则置 NOW()；结束态清空时钟并写 last_run_ms。
 func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, lastErr string, runMs int, convID int64) error {
-	if status == "running" {
+	if status == "running" || status == "compressing" {
 		_, err := s.db.ExecContext(ctx,
-			`UPDATE managed_agents SET status=?, last_error=?, last_run_ms=?, run_started_at=NOW(),
+			`UPDATE managed_agents SET status=?, last_error=?, last_run_ms=?,
+			 run_started_at=IFNULL(run_started_at, NOW()),
 			 conversation_id=IFNULL(NULLIF(?,0), conversation_id) WHERE id=?`,
 			status, lastErr, runMs, convID, id)
 		return err
@@ -338,6 +400,40 @@ func (s *Store) SetManagedAgentStatus(ctx context.Context, id int64, status, las
 	return err
 }
 
+// ManagedAgentStatusByConversation 按会话反查数字员工 id 与当前 status（无则 0）。
+func (s *Store) ManagedAgentStatusByConversation(ctx context.Context, convID int64) (agentID int64, status string, err error) {
+	if convID <= 0 {
+		return 0, "", nil
+	}
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id, IFNULL(status,'idle') FROM managed_agents WHERE conversation_id=? LIMIT 1`, convID).
+		Scan(&agentID, &status)
+	if err == sql.ErrNoRows {
+		return 0, "", nil
+	}
+	return agentID, status, err
+}
+
+// SetManagedAgentAvatarURL 更新头像 URL（空字符串清空）。
+func (s *Store) SetManagedAgentAvatarURL(ctx context.Context, id int64, url string) error {
+	url = strings.TrimSpace(url)
+	var v any
+	if url == "" {
+		v = nil
+	} else {
+		v = url
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE managed_agents SET avatar_url=? WHERE id=?`, v, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SetManagedAgentConversation 绑定当前会话。
 func (s *Store) SetManagedAgentConversation(ctx context.Context, id, convID int64) error {
 	_, err := s.db.ExecContext(ctx,
@@ -345,7 +441,7 @@ func (s *Store) SetManagedAgentConversation(ctx context.Context, id, convID int6
 	return err
 }
 
-// CreateAgentConversation 为管理型智能体新建 chat 会话。
+// CreateAgentConversation 为数字员工新建 chat 会话。
 func (s *Store) CreateAgentConversation(ctx context.Context, agentID int64) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO conversations (user_ip, mode, agent_id) VALUES (?,?,?)`,

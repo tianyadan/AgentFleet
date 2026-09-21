@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// AgentPolicy 管理型智能体硬性权限(写入/联网/rm/工作区)。
+// AgentPolicy 数字员工硬性权限(写入/联网/rm/工作区)。
 type AgentPolicy struct {
 	AllowWrite    bool
 	AllowNetwork  bool
@@ -13,7 +13,7 @@ type AgentPolicy struct {
 	WorkspacePath string // 非空则禁止跨区
 }
 
-// ApplyAgentPolicy 在 Classify 之后施加智能体策略;命中则 Deny。
+// ApplyAgentPolicy 在 Classify 之后施加数字员工策略;命中则 Deny。
 // 已开启联网时:WebFetch/WebSearch 直接 Allow,避免「网络策略拦截」式误拒。
 func ApplyAgentPolicy(tool string, input map[string]interface{}, dec Decision, p AgentPolicy) Decision {
 	if dec.Behavior == Deny {
@@ -27,19 +27,19 @@ func ApplyAgentPolicy(tool string, input map[string]interface{}, dec Decision, p
 	// 联网类工具:策略优先于 Classify 的 Ask
 	if tool == "WebFetch" || tool == "WebSearch" || tool == "Browser" {
 		if p.AllowNetwork {
-			return Decision{Allow, "智能体已授权联网"}
+			return Decision{Allow, "数字员工已授权联网"}
 		}
-		return Decision{Deny, "智能体策略禁止联网"}
+		return Decision{Deny, "数字员工策略禁止联网"}
 	}
 
 	if !p.AllowRm && looksLikeRm(tool, cmd) {
-		return Decision{Deny, "智能体策略禁止 rm 操作"}
+		return Decision{Deny, "数字员工策略禁止 rm 操作"}
 	}
 	if !p.AllowWrite && isWriteTool(tool, cmd, input) {
-		return Decision{Deny, "智能体策略禁止写入"}
+		return Decision{Deny, "数字员工策略禁止写入"}
 	}
 	if !p.AllowNetwork && isNetworkTool(tool, cmd) {
-		return Decision{Deny, "智能体策略禁止联网"}
+		return Decision{Deny, "数字员工策略禁止联网"}
 	}
 	if ws := strings.TrimSpace(p.WorkspacePath); ws != "" {
 		if path := toolPath(tool, input); path != "" && !underRoot(path, ws) {

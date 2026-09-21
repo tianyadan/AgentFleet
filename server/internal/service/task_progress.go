@@ -125,7 +125,7 @@ func (tp *TaskProgress) fail(ctx context.Context, msg string) {
 func truncateRunTitle(q string) string {
 	q = strings.TrimSpace(q)
 	if q == "" {
-		return "智能体任务"
+		return "数字员工任务"
 	}
 	return truncateRunes(q, 40)
 }

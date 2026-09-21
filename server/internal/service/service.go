@@ -50,6 +50,9 @@ type Service struct {
 
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
+
+	cloneJobMap     *sync.Map
+	compactPending  *sync.Map // convID -> true，Codex JSONL 压缩延后到回复落库后再同步
 }
 
 type managedRun struct {
@@ -66,7 +69,9 @@ func New(cfg config.Config, st *store.Store) *Service {
 		Reviewer: newReviewer(cfg),
 		TestHub:  testsrv.NewHub(cfg.PermissionWaitSeconds()),
 		Notify:   notify.New(cfg.NotifyScript, cfg.BarkNotify),
-		runs:     map[int64]*managedRun{},
+		runs:           map[int64]*managedRun{},
+		cloneJobMap:    &sync.Map{},
+		compactPending: &sync.Map{},
 	}
 	svc.Sched = NewScheduler(svc)
 	svc.Memory = NewMemoryService(st)
@@ -90,7 +95,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 
 // HandlePermissionRequest 由 hook 调用:分类工具调用,只读自动放行、灾难自动拒绝、
 // 其余登记为待决请求并阻塞等待前端裁决(超时/断连按拒绝)。
-// policyAgentID>0 时按该智能体策略裁决(委托场景:会话挂调用方,策略用被调方)。
+// policyAgentID>0 时按该数字员工策略裁决(委托场景:会话挂调用方,策略用被调方)。
 func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, input map[string]interface{}, convID, policyAgentID int64) permission.Decision {
 	if !s.Cfg.PermissionEnabled {
 		return permission.Decision{Behavior: permission.Deny, Reason: "未启用授权代理"}
@@ -150,7 +155,7 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 
 	note := ""
 	if policyAgentID > 0 && policyAgentName != "" {
-		note = "委托智能体「" + policyAgentName + "」申请授权"
+		note = "同事「" + policyAgentName + "」申请授权"
 	}
 	if s.Reviewer != nil && s.Perms.IsAuto(convID) {
 		allow, reason := s.review(ctx, convID, tool, summary, roots)
@@ -410,11 +415,12 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 	}
 
 	sysPrompt := s.SystemPrompt(ctx)
+	sysPrompt = s.consumeSystemReinject(ctx, convID, sysPrompt)
 	timeout := s.Cfg.AskTimeout()
 	// Ask 结束务必清理本会话残留的挂起授权(唤醒 hook,通知前端出队)
 	defer s.Perms.DropByConv(convID)
 	hook := agent.HookSpec{}
-	if s.Cfg.PermissionEnabled {
+	if s.Cfg.HookBin != "" {
 		hook = agent.HookSpec{
 			Bin:      s.Cfg.HookBin,
 			Backend:  s.Cfg.BackendURL,

@@ -51,7 +51,7 @@ func (s *Service) runEngineWithRecover(
 
 	partial := strings.TrimSpace(out)
 	for attempt := 1; attempt <= maxTerminalRecover; attempt++ {
-		msg := "⚠️ 智能体任务终端（进程被中断），正在自检任务状态…（失败重试 " + itoa(attempt) + "/" + itoa(maxTerminalRecover) + "）"
+		msg := "⚠️ 数字员工任务中断（进程被中断），正在自检任务状态…（失败重试 " + itoa(attempt) + "/" + itoa(maxTerminalRecover) + "）"
 		emitAsk(onEvent, map[string]any{"type": "system_note", "content": msg})
 		_, _ = s.Store.InsertMessage(context.WithoutCancel(ctx), &store.Message{
 			ConversationID: convID, Role: "system", Content: msg, Status: "ok",

@@ -4,6 +4,14 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# 加载仓库根 .env（密钥等，勿提交）
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 MODE="${1:-all}"
 
 if [ "$MODE" != "--skip-db" ]; then

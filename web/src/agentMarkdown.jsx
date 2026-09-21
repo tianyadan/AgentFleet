@@ -4,7 +4,7 @@ import { marked } from 'marked'
 const API = '/api'
 
 /**
- * 智能体 Markdown：鉴权拉取工作区图片，支持相对路径 / file:// / 绝对路径。
+ * 数字员工 Markdown：鉴权拉取工作区图片，支持相对路径 / file:// / 绝对路径。
  */
 export default function AgentMarkdown({ content, agentId, authHeaders, className = 'msg-body msg-body-flat' }) {
   const html = useMemo(() => marked.parse(content || ''), [content])
@@ -46,7 +46,7 @@ export default function AgentMarkdown({ content, agentId, authHeaders, className
       cancelled = true
       revoke.forEach((u) => URL.revokeObjectURL(u))
     }
-    // authHeaders 可能每次 render 新引用；仅随正文/智能体变化重拉
+    // authHeaders 可能每次 render 新引用；仅随正文/数字员工变化重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html, agentId])
 

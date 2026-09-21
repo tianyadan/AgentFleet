@@ -1,5 +1,5 @@
 /**
- * 管理型智能体运行态(模块级):切换菜单/登出不丢 SSE / chatLog / 授权队列。
+ * 数字员工运行态(模块级):切换菜单/登出不丢 SSE / chatLog / 授权队列。
  */
 const sessions = new Map()
 const listeners = new Set()

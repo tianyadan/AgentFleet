@@ -4,7 +4,7 @@ import { PermissionCard } from '../PermissionCard.jsx'
 const API = '/api'
 
 /**
- * 团队编排全局授权浮层：即使不在运行详情页也能裁决。
+ * 项目协作全局授权浮层：即使不在运行详情页也能裁决。
  */
 export default function WorkflowPermOverlay({ authHeaders, onUnauthorized }) {
   const [items, setItems] = useState([])
@@ -48,20 +48,20 @@ export default function WorkflowPermOverlay({ authHeaders, onUnauthorized }) {
   return (
     <div className="ma-perm-overlay wf-perm-overlay">
       <div className="ma-perm-overlay-card">
-        <div className="perm-title">🔐 团队编排 · 命令待授权</div>
+        <div className="perm-title">🔐 项目协作 · 命令待授权</div>
         <PermissionCard
           p={p}
           more={items.length - 1}
           busy={busy}
           onDecide={decide}
-          title="团队节点申请执行命令"
+          title="协作节点申请执行命令"
         />
       </div>
     </div>
   )
 }
 
-/** 轮询团队编排待授权数与运行中团队数 */
+/** 轮询项目协作待授权数与运行中团队数 */
 export function useWorkflowBadges(authHeaders, enabled) {
   const [pending, setPending] = useState(0)
   const [running, setRunning] = useState(0)

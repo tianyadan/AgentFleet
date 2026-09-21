@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { hasBearerToken, shouldForceLogout } from './authRequest.js'
+import { ListCollapseIcon } from './adminMenuIcons.jsx'
 import AgentMarkdown from './agentMarkdown.jsx'
+import { agentAvatarUrl, compressImageFile } from './agentAvatar.js'
 import {
   allPendingPerms,
   anyAgentLoading,
@@ -9,6 +12,7 @@ import {
   setAgentChatLog,
   subscribeAgentSessions,
 } from './managedAgentSessions.js'
+import { coalesceChatLog } from './coalesceChatLog.js'
 
 const API = '/api'
 const PAGE_SIZE = 20
@@ -69,6 +73,8 @@ function emptyPolicy() {
 /** 状态英文 → 中文展示 */
 function statusZh(st) {
   const s = String(st || 'idle')
+  if (s === 'initializing') return '初始化中'
+  if (s === 'compressing') return '压缩记忆'
   if (s === 'running' || s === 'busy' || s === '插话中') return '忙碌中'
   if (s === 'waiting') return '等待中'
   if (s === 'error') return '错误'
@@ -76,11 +82,21 @@ function statusZh(st) {
   return '空闲中'
 }
 
-/** 是否被团队编排占用 */
+/** 是否被项目协作占用 */
 function isWorkflowBusy(a) {
   const o = a?.occupancy
   if (!o) return false
   return o.source_type === 'WORKFLOW' || Number(o.workflow_run_id) > 0
+}
+
+/** 源员工正在为副本做静默总结：禁止提问 */
+function isCloneInitBusy(a) {
+  return a?.occupancy?.source_type === 'CLONE_INIT'
+}
+
+/** 对话输入应锁定 */
+function isChatLocked(a) {
+  return isWorkflowBusy(a) || isCloneInitBusy(a)
 }
 
 /** 忙碌来源一行文案 */
@@ -94,6 +110,8 @@ function occupancyLine(a) {
 
 function statusClass(st) {
   const s = String(st || 'idle')
+  if (s === 'initializing') return 'initializing'
+  if (s === 'compressing') return 'compressing'
   if (s === 'running' || s === 'busy' || s === '插话中') return 'running'
   if (s === 'waiting') return 'waiting'
   if (s === 'error') return 'error'
@@ -101,7 +119,7 @@ function statusClass(st) {
 }
 
 /**
- * 管理台「智能体管理」：授权弹窗、自动审核、分页、插话、设置。
+ * 管理台「数字员工管理」：授权弹窗、自动审核、分页、插话、设置。
  */
 export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active = true, onOpenWorkflowRun }) {
   const [agents, setAgents] = useState([])
@@ -109,15 +127,20 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   const [question, setQuestion] = useState('')
   const [tasks, setTasks] = useState([])
   const [createOpen, setCreateOpen] = useState(false)
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [copyName, setCopyName] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [folders, setFolders] = useState([])
   const [agentSearch, setAgentSearch] = useState('')
   const [collapsedFolders, setCollapsedFolders] = useState({})
   const [folderCreateOpen, setFolderCreateOpen] = useState(false)
-  const [folderCreateName, setFolderCreateName] = useState('新建文件夹')
+  const [folderCreateName, setFolderCreateName] = useState('新建工作组')
   const [folderEdit, setFolderEdit] = useState(null) // { id, name }
+  const [listCollapsed, setListCollapsed] = useState(() => {
+    try { return localStorage.getItem('ma_list_collapsed') === '1' } catch { return false }
+  })
   const [folderEditName, setFolderEditName] = useState('')
-  const [newName, setNewName] = useState('开发智能体')
+  const [newName, setNewName] = useState('新同事')
   const [newEngine, setNewEngine] = useState('claude')
   const [newRules, setNewRules] = useState('')
   const [newPolicy, setNewPolicy] = useState(() => emptyPolicy())
@@ -131,6 +154,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   const [rulesDraft, setRulesDraft] = useState('')
   const [permBusy, setPermBusy] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
+  const [taskPlanSaving, setTaskPlanSaving] = useState(false)
   const [, setTick] = useState(0)
   const [, setSessVer] = useState(0)
   const boxRef = useRef(null)
@@ -139,6 +163,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   viewRef.current = { active, selectedId: selectedId, agents }
 
   const selected = agents.find((a) => a.id === selectedId) || null
+  const initializing = selected?.status === 'initializing'
   const sess = getAgentSession(selectedId)
   const loading = !!sess.loading
   const compressing = !!sess.compressing
@@ -146,6 +171,8 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   const interrupting = !!sess.interrupting
   const permQueue = sess.permQueue || []
   const autoOn = !!sess.autoOn
+  // 缺省 true：兼容尚未返回字段的旧响应
+  const taskPlanOn = selected ? selected.task_plan_enabled !== false : true
   const invokeMap = sess.invokes || {}
   const mentionCandidates = agents.filter((a) => a.id !== selectedId)
 
@@ -158,8 +185,13 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   // 上下文圆环：空闲/运行中每 5s 刷新真实占用
   useEffect(() => {
     if (!selectedId || !active) return undefined
-    refreshAgentContext(selectedId, false)
-    const t = setInterval(() => refreshAgentContext(selectedId, false), 5000)
+    // 对话进行中不要探测 /context：会 resume 同一 session，把本地命令插进当前回合
+    const poll = () => {
+      if (getAgentSession(selectedId).loading) return
+      refreshAgentContext(selectedId, false)
+    }
+    poll()
+    const t = setInterval(poll, 5000)
     return () => clearInterval(t)
   }, [selectedId, active])
 
@@ -175,11 +207,17 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   }, [selectedId, permQueue.length])
 
   async function loadAgents(preferId) {
+    const headers = authHeaders()
+    // 首页未登录也会挂着本面板轮询。没令牌时接口必然 401，不能当成登录过期。
+    if (!hasBearerToken(headers)) return
     const [res, folderRes] = await Promise.all([
-      fetch(`${API}/admin/agents`, { headers: authHeaders() }),
-      fetch(`${API}/admin/agent-folders`, { headers: authHeaders() }),
+      fetch(`${API}/admin/agents`, { headers }),
+      fetch(`${API}/admin/agent-folders`, { headers }),
     ])
-    if (res.status === 401 || folderRes.status === 401) { onUnauthorized?.(); return }
+    if (shouldForceLogout(res.status, headers) || shouldForceLogout(folderRes.status, headers)) {
+      onUnauthorized?.()
+      return
+    }
     if (!res.ok) return
     const d = await res.json()
     const items = d.items || []
@@ -249,7 +287,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       body: JSON.stringify({
         request_id: ev.request_id,
         agent_id: agentId,
-        agent_name: agent?.name || `智能体#${agentId}`,
+        agent_name: agent?.name || `数字员工#${agentId}`,
         tool_name: ev.tool_name,
         command: ev.summary,
         risk: ev.risk,
@@ -269,9 +307,11 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     const msgData = await msgRes.json()
     const taskData = await taskRes.json()
     setTasks(taskData.items || [])
-    // force:结束后用 DB 校准全文;非 force 时运行中不覆盖本地流式气泡
+    // force:结束后用 DB 校准全文;若 DB 被延迟 compact 清短则保留本地流式正文
     if (force || !getAgentSession(id).loading) {
-      setAgentChatLog(id, mapMsgs(msgData.items))
+      const fromDb = mapMsgs(msgData.items)
+      const next = force ? coalesceChatLog(getAgentSession(id).chatLog, fromDb) : fromDb
+      setAgentChatLog(id, next)
       patchAgentSession(id, {
         totalMessages: msgData.total || 0,
         hasMore: !!msgData.has_more,
@@ -356,15 +396,17 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
 
   useEffect(() => {
     const tick = () => {
+      const headers = authHeaders()
+      if (!hasBearerToken(headers)) return
       loadAgents(selectedId || undefined)
       if (selectedId) {
-        fetch(`${API}/admin/agents/${selectedId}/tasks`, { headers: authHeaders() })
+        fetch(`${API}/admin/agents/${selectedId}/tasks`, { headers })
           .then((r) => r.json())
           .then((d) => setTasks(d.items || []))
           .catch(() => {})
       }
     }
-    const ms = anyAgentLoading() || agents.some((a) => a.status === 'running') ? 1500 : 4000
+    const ms = anyAgentLoading() || agents.some((a) => a.status === 'running' || a.status === 'compressing' || a.status === 'initializing' || a.occupancy?.source_type === 'CLONE_INIT') ? 1500 : 4000
     const t = setInterval(tick, ms)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -386,7 +428,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          name: newName.trim() || '未命名智能体',
+          name: newName.trim() || '未命名员工',
           engine: newEngine,
           rules_prompt: newRules,
           allow_write: !!newPolicy.allow_write,
@@ -405,6 +447,77 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       setCreateOpen(false)
       setNewPolicy(emptyPolicy())
       await loadAgents(d.id)
+    } finally { setBusy(false) }
+  }
+
+  async function copyAgent(e) {
+    e?.preventDefault?.()
+    if (!selected || busy) return
+    const name = copyName.trim()
+    if (!name) return
+    setBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${selected.id}/copy`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name }),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json()
+      if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '复制失败' }); return }
+      setCopyOpen(false)
+      await loadAgents(d.id)
+    } finally { setBusy(false) }
+  }
+
+  async function retryCloneInit() {
+    if (!selected || busy) return
+    setBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${selected.id}/retry-init`, {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '重试失败' }); return }
+      await loadAgents(selected.id)
+    } finally { setBusy(false) }
+  }
+
+  async function uploadAvatar(file) {
+    if (!selected || !file || busy) return
+    setBusy(true)
+    try {
+      const blob = await compressImageFile(file, 512)
+      const fd = new FormData()
+      fd.append('file', blob, 'avatar.jpg')
+      const res = await fetch(`${API}/admin/agents/${selected.id}/avatar`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '上传失败' }); return }
+      await loadAgents(selected.id)
+    } catch (err) {
+      patchAgentSession(selected.id, { error: String(err.message || err) })
+    } finally { setBusy(false) }
+  }
+
+  async function clearAvatar() {
+    if (!selected || busy) return
+    setBusy(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${selected.id}/avatar`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      })
+      if (res.status === 401) { onUnauthorized?.(); return }
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { patchAgentSession(selected.id, { error: d.error || '清除失败' }); return }
+      await loadAgents(selected.id)
     } finally { setBusy(false) }
   }
 
@@ -437,7 +550,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   async function createFolder(e) {
     e?.preventDefault?.()
     if (busy) return
-    const name = folderCreateName.trim() || '新建文件夹'
+    const name = folderCreateName.trim() || '新建工作组'
     setBusy(true)
     try {
       const res = await fetch(`${API}/admin/agent-folders`, {
@@ -448,7 +561,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       if (res.status === 401) { onUnauthorized?.(); return }
       if (!res.ok) return
       setFolderCreateOpen(false)
-      setFolderCreateName('新建文件夹')
+      setFolderCreateName('新建工作组')
       await loadAgents(selectedId)
     } finally { setBusy(false) }
   }
@@ -482,7 +595,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     await loadAgents(selectedId)
   }
 
-  /** 从文件夹移出到未分组 */
+  /** 从工作组移出到未入组 */
   async function removeAgentFromFolder(agentId) {
     await moveAgentToFolder(agentId, 0)
   }
@@ -503,7 +616,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
 
   async function deleteAgent() {
     if (!selected || busy) return
-    if (!window.confirm(`确认删除智能体「${selected.name}」？`)) return
+    if (!window.confirm(`确认解聘数字员工「${selected.name}」？`)) return
     setBusy(true)
     try {
       const id = selected.id
@@ -513,23 +626,13 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     } finally { setBusy(false) }
   }
 
-  async function newChat() {
-    if (!selected || loading) return
-    const res = await fetch(`${API}/admin/agents/${selected.id}/new`, { method: 'POST', headers: authHeaders() })
-    const d = await res.json().catch(() => ({}))
-    setAgentChatLog(selected.id, [])
-    patchAgentSession(selected.id, {
-      totalMessages: 0, hasMore: false, convId: d.conversation_id || 0, autoOn: false, permQueue: [],
-      taskTokens: 0, contextUsed: 0, contextWindow: 0,
-    })
-    await loadAgents(selected.id)
-    await refreshAgentContext(selected.id, true)
-  }
-
   async function compressChat() {
     if (!selected || loading || compressing) return
     const id = selected.id
     patchAgentSession(id, { compressing: true, error: '' })
+    setAgents((list) => list.map((a) => (
+      a.id === id ? { ...a, status: 'compressing', run_started_at: a.run_started_at || new Date().toISOString() } : a
+    )))
     try {
       const res = await fetch(`${API}/admin/agents/${id}/compress`, { method: 'POST', headers: authHeaders() })
       const d = await res.json().catch(() => ({}))
@@ -540,6 +643,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       patchAgentSession(id, { error: String(err) })
     } finally {
       patchAgentSession(id, { compressing: false })
+      await loadAgents(id)
     }
   }
 
@@ -549,8 +653,8 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     try {
       let conv = getAgentSession(selected.id).convId || selected.conversation_id
       if (!conv && v) {
-        // 尚无会话时先建空会话
-        const res = await fetch(`${API}/admin/agents/${selected.id}/new`, { method: 'POST', headers: authHeaders() })
+        // 尚无会话时补建（不换会话）
+        const res = await fetch(`${API}/admin/agents/${selected.id}/ensure-conversation`, { method: 'POST', headers: authHeaders() })
         const d = await res.json()
         if (!res.ok) throw new Error(d.error || '创建会话失败')
         conv = d.conversation_id
@@ -572,6 +676,28 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     } catch (e) {
       patchAgentSession(selected.id, { autoOn: false, error: String(e.message || e) })
     } finally { setAutoSaving(false) }
+  }
+
+  /** 切换任务规划：落库到数字员工配置 */
+  async function toggleTaskPlan(v) {
+    if (!selected || taskPlanSaving) return
+    setTaskPlanSaving(true)
+    try {
+      const res = await fetch(`${API}/admin/agents/${selected.id}/task-plan`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ enabled: v }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || `任务规划开关失败(${res.status})`)
+      setAgents((list) => list.map((a) => (
+        a.id === selected.id ? { ...a, task_plan_enabled: v } : a
+      )))
+    } catch (e) {
+      patchAgentSession(selected.id, { error: String(e.message || e) })
+    } finally {
+      setTaskPlanSaving(false)
+    }
   }
 
   async function decide(requestId, behavior) {
@@ -707,6 +833,46 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
           ...prev,
           { role: 'system', content: ev.content || '系统提示', time: Date.now() },
         ])
+      } else if (ev.type === 'context_compacted') {
+        // 运行中不拆毁流式气泡（Codex 常在回合末尾发 compact，否则回复会闪现后消失）
+        if (getAgentSession(agentId).loading) {
+          setAgentChatLog(agentId, (prev) => [
+            ...prev,
+            { role: 'system', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now() },
+          ])
+        } else {
+          setAgentChatLog(agentId, (prev) => {
+            let lastUser = null
+            let lastAsst = null
+            let userIdx = -1
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].role === 'user' && (prev[i].content || '').trim()) {
+                userIdx = i
+                lastUser = { role: 'user', content: prev[i].content, time: prev[i].time || Date.now() }
+                break
+              }
+            }
+            if (userIdx >= 0) {
+              for (let i = prev.length - 1; i > userIdx; i--) {
+                if (prev[i].role === 'assistant' && (prev[i].content || '').trim()) {
+                  lastAsst = {
+                    role: 'assistant',
+                    content: prev[i].content,
+                    time: prev[i].time || Date.now(),
+                    replySec: prev[i].replySec,
+                  }
+                  break
+                }
+              }
+            }
+            const next = [
+              { role: 'assistant', content: ev.content || '📦 上下文已由引擎压缩，会话已保留', time: Date.now() },
+            ]
+            if (lastUser) next.push(lastUser)
+            if (lastAsst) next.push(lastAsst)
+            return next
+          })
+        }
       } else if (ev.type === 'permission_request') {
         patchAgentSession(agentId, {
           permQueue: dedupPerm([...(getAgentSession(agentId).permQueue || []), ev]),
@@ -773,7 +939,6 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       taskTokens: 0,
       liveActivity: { tool: '', summary: '启动中…', at: Date.now() },
     })
-    refreshAgentContext(agentId, true)
     setAgentChatLog(agentId, (prev) => [
       ...prev,
       { role: 'user', content: q, time: Date.now() },
@@ -841,7 +1006,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     }
   }
 
-  /** 输入 @ 时弹出智能体列表 */
+  /** 输入 @ 时弹出同事列表 */
   function onComposerChange(e) {
     const v = e.target.value
     setQuestion(v)
@@ -877,6 +1042,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
 
   async function ask() {
     if (!selected || !question.trim()) return
+    if (selected.status === 'initializing' || isCloneInitBusy(selected)) return
     const q = question.trim()
     setQuestion('')
     const id = selected.id
@@ -939,6 +1105,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      if (selected?.status === 'initializing' || isCloneInitBusy(selected)) return
       ask()
     }
   }
@@ -946,7 +1113,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   function liveRunSec(a) {
     const local = getAgentSession(a.id)
     if (local.loading && local.runStartedAt) return Math.max(1, Math.round((Date.now() - local.runStartedAt) / 1000))
-    if (a.status === 'running' && a.run_started_at) {
+    if ((a.status === 'running' || a.status === 'compressing' || local.compressing) && a.run_started_at) {
       return Math.max(1, Math.round((Date.now() - new Date(a.run_started_at).getTime()) / 1000))
     }
     return 0
@@ -954,18 +1121,23 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
 
   const statusLabel = (a) => {
     const local = getAgentSession(a.id)
+    if (isCloneInitBusy(a)) return '整理记忆'
+    if (local.compressing || a.status === 'compressing') return '压缩记忆'
+    if (a.status === 'initializing') return '初始化中'
     if (local.loading) return '忙碌中'
     return statusZh(a.status)
   }
 
   const workflowBusy = isWorkflowBusy(selected)
+  const cloneInitBusy = isCloneInitBusy(selected)
+  const chatLocked = isChatLocked(selected)
   const liveTask = (tasks || []).find((t) => t.status === 'running' || t.status === 'waiting')
   // 团队占用时不回落到已结束任务；结束后清空进度展示
   const activeTask = liveTask || (workflowBusy ? {
-    task_name: selected?.occupancy?.task_name || selected?.occupancy?.source_name || '团队编排任务',
+    task_name: selected?.occupancy?.task_name || selected?.occupancy?.source_name || '项目协作任务',
     status: 'running',
     progress: 0,
-    message: '团队编排执行中…',
+    message: '项目协作执行中…',
     payload: {},
   } : null)
   const activeProgress = Math.min(100, Math.max(0, activeTask?.progress || 0))
@@ -981,7 +1153,9 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
 
   function renderAgentItem(a) {
     const st = statusLabel(a)
-    const stClass = statusClass(getAgentSession(a.id).loading ? 'running' : a.status)
+    const stClass = isCloneInitBusy(a)
+      ? 'initializing'
+      : statusClass(getAgentSession(a.id).compressing ? 'compressing' : (getAgentSession(a.id).loading ? 'running' : a.status))
     const runSec = liveRunSec(a)
     const pend = (getAgentSession(a.id).permQueue || []).length
     return (
@@ -1004,6 +1178,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         }}
       >
         <div className="ma-item-head">
+          <img className="ma-avatar ma-avatar-sm" src={agentAvatarUrl(a)} alt="" />
           <strong>{a.name}</strong>
           <span className="ma-item-badges">
             {pend > 0 && <span className="admin-badge admin-badge-perm" title="待授权">{pend}</span>}
@@ -1012,7 +1187,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         </div>
         <div className="ma-item-meta">
           <span className="tag engine-tag" style={{ '--eng': engineMeta(a.engine).color }}>{engineMeta(a.engine).label}</span>
-          <span>已运行 {fmtAge(a.created_at)}</span>
+          <span className="ma-age-fixed">已运行 {fmtAge(a.created_at)}</span>
           {runSec > 0 ? <span className="ma-runlive">本次 {fmtSec(runSec)}</span>
             : a.last_run_ms > 0 ? <span>上次 {fmtSec(Math.round(a.last_run_ms / 1000))}</span> : null}
           {isWorkflowBusy(a) && onOpenWorkflowRun && a.occupancy?.workflow_run_id > 0 && (
@@ -1029,32 +1204,51 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
     )
   }
 
+  /** 向左收起工作组列表，把横向空间让给对话区。 */
+  function toggleAgentList() {
+    setListCollapsed((v) => {
+      const next = !v
+      try { localStorage.setItem('ma_list_collapsed', next ? '1' : '0') } catch { /* 隐私模式忽略 */ }
+      return next
+    })
+  }
+
   return (
     <section className="ma-panel">
+      <button
+        type="button"
+        className="ma-list-collapse"
+        onClick={toggleAgentList}
+        title={listCollapsed ? '展开工作组' : '向左收起工作组'}
+        aria-expanded={!listCollapsed}
+        aria-label={listCollapsed ? '展开工作组' : '向左收起工作组'}
+      >
+        <ListCollapseIcon collapsed={listCollapsed} />
+      </button>
       <div className="ma-toolbar">
-        <h2>智能体管理</h2>
+        <h2>数字员工管理</h2>
         <div className="ma-toolbar-actions">
           <button
             type="button"
             className="ghost"
-            onClick={() => { setFolderCreateName('新建文件夹'); setFolderCreateOpen(true) }}
+            onClick={() => { setFolderCreateName('新建工作组'); setFolderCreateOpen(true) }}
             disabled={busy}
           >
-            创建文件夹
+            创建工作组
           </button>
-          <button type="button" className="new" onClick={() => { setNewPolicy(emptyPolicy()); setCreateOpen(true) }}>＋ 一键创建</button>
+          <button type="button" className="new" onClick={() => { setNewPolicy(emptyPolicy()); setCreateOpen(true) }}>＋ 一键招聘</button>
         </div>
       </div>
 
-      <div className="ma-layout">
+      <div className={`ma-layout${listCollapsed ? ' is-collapsed' : ''}`}>
         <aside className="ma-list">
           <input
             className="ma-search"
             value={agentSearch}
             onChange={(e) => setAgentSearch(e.target.value)}
-            placeholder="搜索智能体名称…"
+            placeholder="搜索数字员工名称…"
           />
-          {filteredAgents.length === 0 && <p className="empty">暂无匹配的智能体</p>}
+          {filteredAgents.length === 0 && <p className="empty">暂无匹配的数字员工</p>}
 
           <div
             className="ma-folder-block ma-folder-root"
@@ -1067,14 +1261,14 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
           >
             <div className="ma-folder-head">
               <div className="ma-folder-title">
-                <span className="ma-folder-title-text">未分组</span>
+                <span className="ma-folder-title-text">未入组</span>
                 <span className="ma-folder-title-right">
                   {(() => {
                     const kids = filteredAgents.filter((a) => !a.folder_id)
                     const { direct, wf } = countFolderBusy(kids)
                     return (
                       <>
-                        {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="团队编排忙碌">{wf}</span>}
+                        {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="项目协作忙碌">{wf}</span>}
                         {direct > 0 && <span className="admin-badge ma-folder-badge" title="直接运行中">{direct}</span>}
                         <span className="muted">{kids.length}</span>
                       </>
@@ -1115,7 +1309,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                         const { direct, wf } = countFolderBusy(kids)
                         return (
                           <>
-                            {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="团队编排忙碌">{wf}</span>}
+                            {wf > 0 && <span className="admin-badge admin-badge-workflow ma-folder-badge" title="项目协作忙碌">{wf}</span>}
                             {direct > 0 && <span className="admin-badge ma-folder-badge" title="直接运行中">{direct}</span>}
                             <span className="muted">{kids.length}</span>
                           </>
@@ -1126,7 +1320,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                   <button
                     type="button"
                     className="ma-folder-edit"
-                    title="编辑文件夹"
+                    title="编辑工作组"
                     onClick={(e) => {
                       e.stopPropagation()
                       setFolderEdit({ id: f.id, name: f.name })
@@ -1139,7 +1333,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                 {!collapsed && (
                   <div className="ma-folder-agents">
                     {kids.length === 0
-                      ? <p className="ma-folder-empty">拖入智能体到此文件夹</p>
+                      ? <p className="ma-folder-empty">工作组空闲 · 把同事拖进来</p>
                       : kids.map(renderAgentItem)}
                   </div>
                 )}
@@ -1149,13 +1343,20 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         </aside>
 
         <div className="ma-main">
-          {!selected ? <p className="empty ma-empty">选择左侧智能体，或点击右上角创建</p> : (
+          {!selected ? (
+            <div className="empty ma-empty ma-empty-hero">
+              <div className="ma-empty-icon" aria-hidden="true" />
+              <p>还没有选中同事</p>
+              <p className="ma-empty-sub">从左侧工作组点选，或点右上角「一键招聘」</p>
+            </div>
+          ) : (
             <div className="ma-detail">
               <header className="ma-detail-head">
                 <div className="ma-detail-title">
+                  <img className="ma-avatar ma-avatar-md" src={agentAvatarUrl(selected)} alt="" />
                   <h3>{selected.name}</h3>
                   <span className="tag engine-tag" style={{ '--eng': engineMeta(selected.engine).color }}>{engineMeta(selected.engine).label}</span>
-                  <span className={`ma-status st-${statusClass(getAgentSession(selected.id).loading ? 'running' : selected.status)}`}>
+                  <span className={`ma-status st-${cloneInitBusy ? 'initializing' : statusClass(getAgentSession(selected.id).compressing ? 'compressing' : (getAgentSession(selected.id).loading ? 'running' : selected.status))}`}>
                     {statusLabel(selected)}
                   </span>
                   {workflowBusy && selected.occupancy?.workflow_run_id > 0 && onOpenWorkflowRun && (
@@ -1183,22 +1384,39 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                     setPolicyDraft(policyFromAgent(selected))
                     setSettingsOpen(true)
                   }}>设置</button>
-                  {!workflowBusy && (
+                  {selected.status !== 'initializing' && !cloneInitBusy && (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy || loading}
+                      onClick={() => {
+                        setCopyName(`${selected.name || '未命名员工'} 副本`)
+                        setCopyOpen(true)
+                      }}
+                    >
+                      复制
+                    </button>
+                  )}
+                  {!workflowBusy && !initializing && !cloneInitBusy && (
                     <>
                       <button type="button" className="ghost" onClick={fetchStatusSnapshot} disabled={loading || compressing}>状态</button>
                       <button type="button" className="ghost" onClick={compressChat} disabled={loading || compressing}>
-                        {compressing ? '压缩中…' : '压缩'}
+                        {compressing ? '压缩记忆…' : '压缩'}
                       </button>
-                      <button type="button" className="ghost" onClick={newChat} disabled={loading || compressing}>新对话</button>
                     </>
                   )}
-                  <button type="button" className="ghost danger-text" onClick={deleteAgent} disabled={busy || loading}>删除</button>
+                  {selected.status === 'error' && Number(selected.cloned_from_id) > 0 && (
+                    <button type="button" className="ghost" disabled={busy} onClick={retryCloneInit}>重试初始化</button>
+                  )}
+                  <button type="button" className="ghost danger-text" onClick={deleteAgent} disabled={busy || loading}>解聘</button>
                 </div>
               </header>
 
-              <p className="muted ma-age-line">已运行 {fmtAge(selected.created_at)}</p>
+              <p className="muted ma-age-line ma-age-fixed">已运行 {fmtAge(selected.created_at)}</p>
 
-              {!workflowBusy && compressing && <p className="thinking ma-compressing">正在压缩上下文…</p>}
+              {!workflowBusy && initializing && <p className="thinking">正在继承同事记忆…</p>}
+              {!workflowBusy && cloneInitBusy && <p className="thinking">正在为副本整理记忆，完成后可继续对话</p>}
+              {!workflowBusy && compressing && <p className="thinking ma-compressing">正在压缩记忆…</p>}
 
               {!workflowBusy && Object.keys(invokeMap).length > 0 && (
                 <div className="ma-invoke-dock">
@@ -1223,7 +1441,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                   <button type="button" className="ma-load-more" onClick={loadOlder}>加载更早</button>
                 )}
                 {chatLog.length === 0 && !loading && (
-                  <p className="empty-chat">下达任务后，需授权的命令会在此确认</p>
+                  <p className="empty-chat">给同事下达任务后，需授权的命令会在此确认</p>
                 )}
                 {chatLog.map((m, i) => (
                   <div key={m.id || i} className={`msg ${m.role} ${m.decision === 'deny' ? 'cmd-denied' : ''} ${m.role === 'assistant' ? 'ma-flat' : ''}`}>
@@ -1235,7 +1453,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                             : m.role === 'status' ? '状态'
                             : m.role === 'command'
                               ? (m.decision === 'deny' ? '已拒绝命令' : '已执行命令')
-                              : m.role === 'invoke_quote' ? `引用 · ${m.calleeName || '智能体'}`
+                              : m.role === 'invoke_quote' ? `引用 · ${m.calleeName || '同事'}`
                                 : m.role === 'invoke_divider' ? '调用记录'
                                   : selected.name}
                       </span>
@@ -1272,7 +1490,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                       </div>
                     ) : m.role === 'invoke_quote' ? (
                       <details className="ma-quote" open={false}>
-                        <summary>{m.calleeName || '被调智能体'} 的结果</summary>
+                        <summary>{m.calleeName || '同事'} 的结果</summary>
                         <AgentMarkdown content={m.content || ''} agentId={selected.id} authHeaders={authHeaders} />
                       </details>
                     ) : m.role === 'invoke_divider' ? (
@@ -1308,8 +1526,15 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
               </div>
               )}
 
-              {!workflowBusy && (
+              {!chatLocked && (
               <div className="ma-composer">
+                <CapsuleToggle
+                  label="任务规划"
+                  hint="开启后先拆分步骤并展示进度；关闭则跳过规划、直接执行"
+                  checked={taskPlanOn}
+                  disabled={taskPlanSaving || loading}
+                  onChange={toggleTaskPlan}
+                />
                 <div className="ma-composer-wrap">
                   {mentionOpen && mentionCandidates.length > 0 && (
                     <ul className="ma-mention-list">
@@ -1333,18 +1558,19 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                     onChange={onComposerChange}
                     onKeyDown={onKeyDown}
                     rows={3}
-                    placeholder={loading ? '输入插话内容，Enter 发送；@ 可委托其他智能体' : '输入任务，Enter 发送；输入 @ 选择其他智能体'}
+                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Enter 发送；@ 可协作其他同事' : '输入任务，Enter 发送；输入 @ 选择其他同事')}
+                    disabled={initializing}
                   />
                   <ContextRing used={sess.contextUsed || 0} window={sess.contextWindow || 0} />
                 </div>
                 <div className="ma-composer-actions">
                   {!loading ? (
-                    <button type="button" className="primary" onClick={ask} disabled={!question.trim() || compressing}>
+                    <button type="button" className="primary" onClick={ask} disabled={!question.trim() || compressing || initializing}>
                       发送
                     </button>
                   ) : (
                     <>
-                      <button type="button" className="primary" onClick={ask} disabled={!question.trim() || compressing}>
+                      <button type="button" className="primary" onClick={ask} disabled={!question.trim() || compressing || initializing}>
                         {interrupting ? '插话中…' : '插话'}
                       </button>
                       <button type="button" className="stop" onClick={stopRun}>终止</button>
@@ -1354,13 +1580,19 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
               </div>
               )}
 
+              {cloneInitBusy && (
+                <p className="muted ma-wf-busy-hint">
+                  该同事正在为新复制的同事整理记忆，对话暂不可用；总结完成后将自动恢复。
+                </p>
+              )}
               {workflowBusy && (
                 <p className="muted ma-wf-busy-hint">
-                  该智能体正在团队编排中执行任务，对话暂不可用；完成后将自动恢复对话窗口。
+                  该同事正在项目协作中执行任务，对话暂不可用；完成后将自动恢复对话窗口。
                   {occupancyLine(selected) ? `（${occupancyLine(selected)}）` : ''}
                 </p>
               )}
 
+              {taskPlanOn && (
               <div className="ma-progress-panel">
                 <div className="ma-progress-head">
                   <strong>任务进度</strong>
@@ -1396,6 +1628,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                   </>
                 )}
               </div>
+              )}
             </div>
           )}
           {sess.error && <pre className="error">{sess.error}</pre>}
@@ -1406,7 +1639,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       {createOpen && (
         <div className="modal-mask" onClick={() => !busy && setCreateOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={createAgent}>
-            <h2>创建智能体</h2>
+            <h2>招聘数字员工</h2>
             <label>名称<input value={newName} onChange={(e) => setNewName(e.target.value)} disabled={busy} /></label>
             <label>
               引擎
@@ -1423,7 +1656,28 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
             />
             <div className="modal-actions">
               <button type="button" disabled={busy} onClick={() => setCreateOpen(false)}>取消</button>
-              <button type="submit" disabled={busy}>{busy ? '创建中…' : '创建'}</button>
+              <button type="submit" disabled={busy}>{busy ? '招聘中…' : '确认招聘'}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {copyOpen && selected && (
+        <div className="modal-mask" onClick={() => !busy && setCopyOpen(false)}>
+          <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={copyAgent}>
+            <h2>复制数字员工</h2>
+            <div className="ma-avatar-edit">
+              <img className="ma-avatar ma-avatar-md" src={agentAvatarUrl(selected)} alt="" />
+              <p className="muted" style={{ margin: 0 }}>将沿用当前头像；复制后可在设置中更换。</p>
+            </div>
+            <label>
+              新名称
+              <input value={copyName} onChange={(e) => setCopyName(e.target.value)} disabled={busy} autoFocus />
+            </label>
+            <p className="muted">将复制系统提示词、模型、权限与设置。新同事使用独立会话，并异步继承原员工的工作记忆。</p>
+            <div className="modal-actions">
+              <button type="button" disabled={busy} onClick={() => setCopyOpen(false)}>取消</button>
+              <button type="submit" disabled={busy || !copyName.trim()}>{busy ? '复制中…' : '确认复制'}</button>
             </div>
           </form>
         </div>
@@ -1432,9 +1686,9 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       {folderCreateOpen && (
         <div className="modal-mask" onClick={() => !busy && setFolderCreateOpen(false)}>
           <form className="modal-card" onClick={(e) => e.stopPropagation()} onSubmit={createFolder}>
-            <h2>创建文件夹</h2>
+            <h2>创建工作组</h2>
             <label>
-              文件夹名称
+              工作组名称
               <input
                 value={folderCreateName}
                 onChange={(e) => setFolderCreateName(e.target.value)}
@@ -1454,9 +1708,9 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       {folderEdit && (
         <div className="modal-mask" onClick={() => !busy && setFolderEdit(null)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={saveFolderEdit}>
-            <h2>编辑文件夹</h2>
+            <h2>编辑工作组</h2>
             <label>
-              文件夹名称
+              工作组名称
               <input
                 value={folderEditName}
                 onChange={(e) => setFolderEditName(e.target.value)}
@@ -1464,10 +1718,10 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                 autoFocus
               />
             </label>
-            <h3 className="ma-policy-title">文件夹内智能体</h3>
+            <h3 className="ma-policy-title">工作组内数字员工</h3>
             <div className="ma-folder-agents">
               {agents.filter((a) => Number(a.folder_id) === Number(folderEdit.id)).length === 0 ? (
-                <p className="ma-folder-empty">暂无智能体，可从左侧拖入</p>
+                <p className="ma-folder-empty">工作组还空着，从左侧拖入同事</p>
               ) : (
                 agents
                   .filter((a) => Number(a.folder_id) === Number(folderEdit.id))
@@ -1486,7 +1740,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                   ))
               )}
             </div>
-            <p className="muted">移出后智能体回到「未分组」。</p>
+            <p className="muted">移出后同事回到「未入组」。</p>
             <div className="modal-actions">
               <button type="button" disabled={busy} onClick={() => setFolderEdit(null)}>取消</button>
               <button type="submit" disabled={busy || !folderEditName.trim()}>{busy ? '保存中…' : '保存名称'}</button>
@@ -1498,7 +1752,29 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       {settingsOpen && selected && (
         <div className="modal-mask" onClick={() => !busy && setSettingsOpen(false)}>
           <form className="modal-card ma-settings" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); saveRules() }}>
-            <h2>智能体设置 · {selected.name}</h2>
+            <h2>员工设置 · {selected.name}</h2>
+            <div className="ma-avatar-edit">
+              <img className="ma-avatar ma-avatar-lg" src={agentAvatarUrl(selected)} alt="" />
+              <div className="ma-avatar-actions">
+                <label className="ghost ma-file-btn">
+                  {busy ? '上传中…' : '上传头像'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    disabled={busy}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      e.target.value = ''
+                      if (f) uploadAvatar(f)
+                    }}
+                  />
+                </label>
+                {!!String(selected.avatar_url || '').trim() && (
+                  <button type="button" className="ghost" disabled={busy} onClick={clearAvatar}>恢复默认</button>
+                )}
+              </div>
+            </div>
             <label>
               名称
               <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
@@ -1561,7 +1837,7 @@ function AgentPolicyFields({ value, onChange, workspaces, disabled }) {
         checked={!!v.allow_browser}
         disabled={disabled}
         onChange={(c) => patch({ allow_browser: c })}
-        hint="若打开此选项，请安装 browser-use 插件。开启后智能体可通过该工具操作浏览器；使用完成网页后须及时关闭，勿留僵尸网页。"
+        hint="若打开此选项，请安装 browser-use 插件。开启后数字员工可通过该工具操作浏览器；使用完成网页后须及时关闭，勿留僵尸网页。"
       />
 
       <h3 className="ma-policy-title">运行边界</h3>
@@ -1699,7 +1975,7 @@ export function ManagedAgentPermOverlay({ authHeaders, onUnauthorized }) {
   return (
     <div className="ma-perm-overlay">
       <div className="ma-perm-overlay-card">
-        <div className="perm-title">🔐 智能体 #{p.agentId} 申请授权 · 剩余 {remainSec(p)}s</div>
+        <div className="perm-title">🔐 数字员工 #{p.agentId} 申请授权 · 剩余 {remainSec(p)}s</div>
         <PermCard p={p} more={pending.length - 1} busy={busy} onDecide={(_, b) => decide(b)} />
       </div>
     </div>

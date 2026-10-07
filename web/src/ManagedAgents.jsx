@@ -145,6 +145,8 @@ export default function ManagedAgentsPanel({
   const [folderEditName, setFolderEditName] = useState('')
   const [newName, setNewName] = useState('新同事')
   const [newEngine, setNewEngine] = useState('claude')
+  const [newContextWindow, setNewContextWindow] = useState(1000000)
+  const [contextWindowDraft, setContextWindowDraft] = useState(1000000)
   const [newRules, setNewRules] = useState('')
   const [newPolicy, setNewPolicy] = useState(() => emptyPolicy())
   const [policyDraft, setPolicyDraft] = useState(() => emptyPolicy())
@@ -450,6 +452,7 @@ export default function ManagedAgentsPanel({
         body: JSON.stringify({
           name: newName.trim() || '未命名员工',
           engine: newEngine,
+          context_window_tokens: newContextWindow,
           rules_prompt: newRules,
           allow_write: !!newPolicy.allow_write,
           allow_network: !!newPolicy.allow_network,
@@ -550,6 +553,7 @@ export default function ManagedAgentsPanel({
         headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: renameDraft.trim() || selected.name,
+          context_window_tokens: contextWindowDraft,
           rules_prompt: rulesDraft,
           allow_write: !!policyDraft.allow_write,
           allow_network: !!policyDraft.allow_network,
@@ -1416,6 +1420,7 @@ export default function ManagedAgentsPanel({
                     setRenameDraft(selected.name || '')
                     setRulesDraft(selected.rules_prompt || '')
                     setPolicyDraft(policyFromAgent(selected))
+                    setContextWindowDraft(selected.context_window_tokens || 1000000)
                     setSettingsOpen(true)
                   }}>设置</button>
                   {selected.status !== 'initializing' && !cloneInitBusy && (
@@ -1685,6 +1690,14 @@ export default function ManagedAgentsPanel({
                 {ENGINES.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
               </select>
             </label>
+            <label>
+              上下文窗口
+              <select value={newContextWindow} onChange={(e) => setNewContextWindow(Number(e.target.value))} disabled={busy}>
+                <option value={262144}>256K</option>
+                <option value={524288}>512K</option>
+                <option value={1000000}>1M</option>
+              </select>
+            </label>
             <label>规则描述<textarea rows={4} value={newRules} onChange={(e) => setNewRules(e.target.value)} disabled={busy} /></label>
             <AgentPolicyFields
               value={newPolicy}
@@ -1816,6 +1829,14 @@ export default function ManagedAgentsPanel({
             <label>
               名称
               <input value={renameDraft} onChange={(e) => setRenameDraft(e.target.value)} disabled={busy} />
+            </label>
+            <label>
+              上下文窗口
+              <select value={contextWindowDraft} onChange={(e) => setContextWindowDraft(Number(e.target.value))} disabled={busy}>
+                <option value={262144}>256K</option>
+                <option value={524288}>512K</option>
+                <option value={1000000}>1M</option>
+              </select>
             </label>
             <label>
               系统提示词

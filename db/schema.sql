@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   avatar_url      VARCHAR(512)   NULL,
   folder_id       BIGINT         NULL,
   engine          VARCHAR(32)    NOT NULL,           -- claude | codex | agent
+  context_window_tokens BIGINT NOT NULL DEFAULT 1000000, -- display denominator only
   bin_path        VARCHAR(512)   NOT NULL DEFAULT '',
   rules_prompt    LONGTEXT       NULL,
   auto_review     TINYINT        NOT NULL DEFAULT 0,

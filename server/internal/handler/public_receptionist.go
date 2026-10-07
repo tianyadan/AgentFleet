@@ -194,6 +194,11 @@ func (h *Handler) PublicContext(c *gin.Context) {
 		if win <= 0 {
 			win = h.svc.Cfg.ContextWindowForEngine(recv.Engine)
 		}
+		// 老版本会把 Claude 的 200K 默认估算窗口直接落库。
+		// 此处仅迁移这一旧默认值的展示分母；真实模型窗口须由配置保证。
+		if strings.EqualFold(recv.Engine, "claude") && win == 200000 && h.svc.Cfg.ContextWindowForEngine(recv.Engine) == 1000000 {
+			win = 1000000
+		}
 		pct := 0.0
 		if win > 0 {
 			pct = float64(meta.UsedTokens) * 100 / float64(win)

@@ -24,6 +24,7 @@ function emptySession() {
     taskTokens: 0,
     contextUsed: 0,
     contextWindow: 0,
+    contextEstimated: true, // Codex/Cursor 默认估算；Claude probe 成功后为 false
   }
 }
 

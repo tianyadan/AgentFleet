@@ -124,7 +124,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	// 5) v0.2.15 引擎会话与上下文快照
 	for _, col := range []struct{ name, ddl string }{
-		{"engine_session_id", `ALTER TABLE conversations ADD COLUMN engine_session_id VARCHAR(128) NULL`},
+		{"engine_session_id", `ALTER TABLE conversations ADD COLUMN engine_session_id VARCHAR(512) NULL`},
 		{"engine_used_tokens", `ALTER TABLE conversations ADD COLUMN engine_used_tokens BIGINT NOT NULL DEFAULT 0`},
 		{"engine_window_tokens", `ALTER TABLE conversations ADD COLUMN engine_window_tokens BIGINT NOT NULL DEFAULT 0`},
 	} {
@@ -139,6 +139,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 			if _, err := s.db.ExecContext(ctx, col.ddl); err != nil {
 				return err
 			}
+		}
+	}
+	// 加宽已有 VARCHAR(128) 的 engine_session_id，避免超长 id 写入失败导致无法 resume。
+	var sidLen int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT IFNULL(CHARACTER_MAXIMUM_LENGTH,0) FROM information_schema.COLUMNS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'conversations' AND COLUMN_NAME = 'engine_session_id'`,
+	).Scan(&sidLen); err != nil {
+		return err
+	}
+	if sidLen > 0 && sidLen < 512 {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE conversations MODIFY COLUMN engine_session_id VARCHAR(512) NULL`); err != nil {
+			return err
 		}
 	}
 	// 6) v0.2.17：一次性清除曾被任务拆分污染的 Claude engine_session
@@ -234,6 +247,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	// 11) 统一 Permission Gateway：会话授权 + 审计扩展
+	if err := s.ensurePermissionGatewaySchema(ctx); err != nil {
+		return err
+	}
+	// 12) v0.3.4 前台助理 + 访客
+	if err := s.ensureReceptionistSchema(ctx); err != nil {
+		return err
 	}
 	return nil
 }

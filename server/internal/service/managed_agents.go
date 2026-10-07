@@ -196,7 +196,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 		tp.advance(runCtx, mid, steps[mid])
 	}
 
-	// history 恒空：由 Claude/Codex/Cursor resume 维护多轮上下文
+	// history 有 session 时恒空；丢失时由 runManagedEngine 回退 RecentTurns
 	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, sys, q, "", onChunk, onEvent, userQuestion)
 	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
@@ -274,6 +274,7 @@ func (s *Service) flushCompactAfterAsk(ctx context.Context, convID int64, onEven
 	_ = s.SyncPlatformAfterCompact(context.WithoutCancel(ctx), convID)
 	emitAsk(onEvent, map[string]any{
 		"type": "context_compacted", "content": CompactNoticeText,
+		"used_tokens": 0, "estimated": true, // compact 后重置估算占用
 	})
 }
 

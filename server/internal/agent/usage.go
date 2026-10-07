@@ -8,6 +8,8 @@ import (
 )
 
 // RunMeta 一轮引擎调用的用量/会话元数据。
+// UsedTokens 来自本轮 input(+cache)，是估算占用，不是跨 turn 累计，也不等于引擎内部真实 context occupancy。
+// Estimated=true 表示展示时须标明「约」；仅 Claude /context probe 成功后才应把对应 EngineContext.Estimated 置 false。
 type RunMeta struct {
 	SessionID     string `json:"session_id,omitempty"`
 	InputTokens   int64  `json:"input_tokens"`
@@ -15,7 +17,8 @@ type RunMeta struct {
 	CacheRead     int64  `json:"cache_read_tokens"`
 	CacheWrite    int64  `json:"cache_write_tokens"`
 	ContextWindow int64  `json:"context_window"`
-	UsedTokens    int64  `json:"used_tokens"` // 窗口已用（优先 input+cache）
+	UsedTokens    int64  `json:"used_tokens"` // 本轮估算占用（优先 input+cache），勿当精确值
+	Estimated     bool   `json:"estimated"`   // stream/JSONL usage 恒为 true
 }
 
 // MetaFn 用量回调。
@@ -29,7 +32,7 @@ func ParseClaudeStreamMeta(line []byte) (RunMeta, bool) {
 	}
 	var m RunMeta
 	ok := false
-	if sid, _ := raw["session_id"].(string); sid != "" {
+	if sid := ExtractSessionID(raw); sid != "" {
 		m.SessionID = sid
 		ok = true
 	}
@@ -71,9 +74,13 @@ func ParseClaudeStreamMeta(line []byte) (RunMeta, bool) {
 			}
 		}
 	}
+	// stream usage = 本轮估算，真值需 /context probe。
 	m.UsedTokens = m.InputTokens + m.CacheRead
 	if m.UsedTokens == 0 && m.OutputTokens > 0 {
 		m.UsedTokens = m.InputTokens + m.OutputTokens
+	}
+	if ok && (m.InputTokens > 0 || m.OutputTokens > 0 || m.UsedTokens > 0) {
+		m.Estimated = true
 	}
 	return m, ok
 }
@@ -110,6 +117,50 @@ func scaleTokenNum(num, suffix string) int64 {
 		f *= 1000000
 	}
 	return int64(f + 0.5)
+}
+
+// ExtractSessionID 从引擎 JSON 取会话 id（兼容 snake/camel 与 thread/chat）。
+func ExtractSessionID(raw map[string]interface{}) string {
+	if raw == nil {
+		return ""
+	}
+	for _, k := range []string{"session_id", "sessionId", "thread_id", "threadId", "chat_id", "chatId"} {
+		if s := jsonString(raw[k]); s != "" {
+			return s
+		}
+	}
+	if th, _ := raw["thread"].(map[string]interface{}); th != nil {
+		if s := jsonString(th["id"]); s != "" {
+			return s
+		}
+		if s := ExtractSessionID(th); s != "" {
+			return s
+		}
+	}
+	if msg, _ := raw["msg"].(map[string]interface{}); msg != nil {
+		if s := ExtractSessionID(msg); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// StickySessionID 主会话只绑第一次出现的 id，避免子 agent/后到的 thread 覆盖导致下一轮失忆。
+func StickySessionID(prev, incoming string) string {
+	prev = strings.TrimSpace(prev)
+	if prev != "" {
+		return prev
+	}
+	return strings.TrimSpace(incoming)
+}
+
+func jsonString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		return ""
+	}
 }
 
 func jsonInt64(v interface{}) int64 {

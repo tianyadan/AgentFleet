@@ -28,8 +28,10 @@ type ManagedAgent struct {
 	ScheduleCron    string     `json:"schedule_cron"`
 	ScheduleLabel   string     `json:"schedule_label"`
 	Status          string     `json:"status"`
+	IsReceptionist  bool       `json:"is_receptionist"`
 	ConversationID  int64      `json:"conversation_id"`
 	ClonedFromID    int64      `json:"cloned_from_id"`
+	FolderName      string     `json:"folder_name,omitempty"` // 列表展示用，非列
 	LastError       string     `json:"last_error"`
 	LastRunMs       int        `json:"last_run_ms"`
 	RunStartedAt    *time.Time `json:"run_started_at,omitempty"`
@@ -90,11 +92,11 @@ func scanManagedAgent(scanner interface {
 }) (ManagedAgent, error) {
 	var a ManagedAgent
 	var runAt sql.NullTime
-	var auto, tp, aw, an, ar, ab, se int
+	var auto, tp, aw, an, ar, ab, se, recv int
 	err := scanner.Scan(
 		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.BinPath, &a.RulesPrompt, &auto, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
-		&a.Status, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
 	if err != nil {
 		return a, err
@@ -106,6 +108,7 @@ func scanManagedAgent(scanner interface {
 	a.AllowRm = ar != 0
 	a.AllowBrowser = ab != 0
 	a.ScheduleEnabled = se != 0
+	a.IsReceptionist = recv != 0
 	if runAt.Valid {
 		t := runAt.Time
 		a.RunStartedAt = &t
@@ -117,7 +120,7 @@ const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(folder_id,0),
 		IFNULL(task_plan_enabled,1),
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
-		status, IFNULL(conversation_id,0), IFNULL(cloned_from_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
+		status, IFNULL(is_receptionist,0), IFNULL(conversation_id,0), IFNULL(cloned_from_id,0), IFNULL(last_error,''), IFNULL(last_run_ms,0),
 		run_started_at, created_at, updated_at`
 
 // ListManagedAgents 全部数字员工(最新更新在前)。

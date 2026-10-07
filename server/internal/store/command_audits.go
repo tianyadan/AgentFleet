@@ -18,6 +18,10 @@ type CommandAudit struct {
 	Risk           string    `json:"risk"`
 	Meaning        string    `json:"meaning"`
 	Note           string    `json:"note"`
+	Engine         string  `json:"engine"`
+	ActionType     string  `json:"action_type"`
+	Environment    string  `json:"environment"`
+	RiskScore      float64 `json:"risk_score"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -25,9 +29,10 @@ type CommandAudit struct {
 func (s *Store) InsertCommandAudit(ctx context.Context, a *CommandAudit) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO command_audits
-		 (conversation_id, agent_id, tool_name, command_text, decision, decided_by, risk, meaning, note)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
-		a.ConversationID, a.AgentID, a.ToolName, a.CommandText, a.Decision, a.DecidedBy, a.Risk, a.Meaning, a.Note)
+		 (conversation_id, agent_id, tool_name, command_text, decision, decided_by, risk, meaning, note, engine, action_type, environment, risk_score)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.ConversationID, a.AgentID, a.ToolName, a.CommandText, a.Decision, a.DecidedBy, a.Risk, a.Meaning, a.Note,
+		a.Engine, a.ActionType, a.Environment, a.RiskScore)
 	if err != nil {
 		return 0, err
 	}

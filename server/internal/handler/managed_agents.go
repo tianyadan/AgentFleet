@@ -25,6 +25,7 @@ func (h *Handler) AdminAgentsList(c *gin.Context) {
 	if items == nil {
 		items = []store.ManagedAgent{}
 	}
+	items = h.svc.EnrichAgentsFolderNames(c.Request.Context(), items)
 	occMap, _ := h.svc.Store.ListOccupancyMap(c.Request.Context())
 	type row struct {
 		store.ManagedAgent
@@ -293,6 +294,61 @@ func (h *Handler) AdminAgentsDelete(c *gin.Context) {
 	}
 	if h.svc.Sched != nil {
 		h.svc.Sched.Reload(c.Request.Context())
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// AdminAgentsBatchDelete 批量解聘。
+func (h *Handler) AdminAgentsBatchDelete(c *gin.Context) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids required"})
+		return
+	}
+	var failed []int64
+	for _, id := range body.IDs {
+		if err := h.svc.DeleteManaged(c.Request.Context(), id); err != nil {
+			failed = append(failed, id)
+		}
+	}
+	if h.svc.Sched != nil {
+		h.svc.Sched.Reload(c.Request.Context())
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "failed": failed})
+}
+
+// AdminAgentsSetReceptionist 设为唯一前台助理。
+func (h *Handler) AdminAgentsSetReceptionist(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := h.svc.Store.SetReceptionist(c.Request.Context(), id); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	a, _ := h.svc.Store.GetManagedAgent(c.Request.Context(), id)
+	c.JSON(http.StatusOK, a)
+}
+
+// AdminAgentsClearReceptionist 取消前台助理（仅当当前为该人时）。
+func (h *Handler) AdminAgentsClearReceptionist(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	cur, _ := h.svc.Store.GetReceptionist(c.Request.Context())
+	if cur == nil || cur.ID != id {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	if err := h.svc.Store.SetReceptionist(c.Request.Context(), 0); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

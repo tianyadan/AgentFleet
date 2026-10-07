@@ -16,3 +16,34 @@ func TestParseClaudeStreamMetaResult(t *testing.T) {
 		t.Fatalf("got %+v ok=%v", m, ok)
 	}
 }
+
+func TestParseClaudeStreamMetaSessionIdCamel(t *testing.T) {
+	line := []byte(`{"type":"system","sessionId":"sess-camel"}`)
+	m, ok := ParseClaudeStreamMeta(line)
+	if !ok || m.SessionID != "sess-camel" {
+		t.Fatalf("got %+v ok=%v", m, ok)
+	}
+}
+
+func TestExtractSessionIDPrefersSnake(t *testing.T) {
+	raw := map[string]interface{}{"session_id": "a", "sessionId": "b", "thread_id": "c"}
+	if got := ExtractSessionID(raw); got != "a" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExtractSessionIDNestedThread(t *testing.T) {
+	raw := map[string]interface{}{"type": "thread.started", "thread": map[string]interface{}{"id": "thr-nested"}}
+	if got := ExtractSessionID(raw); got != "thr-nested" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestStickySessionIDKeepsFirst(t *testing.T) {
+	if got := StickySessionID("parent", "child"); got != "parent" {
+		t.Fatalf("got %q", got)
+	}
+	if got := StickySessionID("", " child "); got != "child" {
+		t.Fatalf("got %q", got)
+	}
+}

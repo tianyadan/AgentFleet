@@ -1,6 +1,44 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.3.4',
+    date: '2026-10-05',
+    items: [
+      '首页改为前台助理接待：取消长短对话模式，Kimi 风黑白布局，输入区内展示上下文占用',
+      '来访登记：HttpOnly Cookie 凭证 7 天，/visitor/me 判断；每次提问记录 IP/设备',
+      '后台「数字员工管理」更名为「数字人」，子菜单「对话 / 数字人管理」；登录默认进对话',
+      '数字人管理卡片：头像/名称/分组、设置与解聘、多选解聘、单选前台助理黄标',
+      '前台工具授权走规则+JEVOS，不弹人工授权窗',
+    ],
+  },
+  {
+    version: 'v0.3.3',
+    date: '2026-10-05',
+    items: [
+      '修复数字人多轮失忆：主会话只绑定第一次 engine_session_id，避免子 agent/新 thread 覆盖后无法 resume',
+      '兼容 camelCase / 嵌套 thread.id；engine_session_id 加宽到 512；无 session 时回退平台历史',
+      'Cursor/Codex 回退命令保留 resume；Ask 结束后不再用 /context 探测以免污染会话',
+    ],
+  },
+  {
+    version: 'v0.3.2',
+    date: '2026-10-05',
+    items: [
+      '统一 Tool Permission Gateway：Hard Deny → 只读安全规则 → 会话精确签名授权 → JEVOS → 人工',
+      'Claude / Codex / Cursor 经 Adapter 转为 ToolAction；Codex/Cursor 若无法执行前拦截会明确标注',
+      '人工弹窗支持「本次允许 / 本次会话允许 / 拒绝」；会话授权随 Conversation 级联删除',
+    ],
+  },
+  {
+    version: 'v0.3.1',
+    date: '2026-10-05',
+    items: [
+      '上下文圆环区分真实/估算：Claude /context 探测成功显示精确百分比，Codex/Cursor 显示「约 xx%」',
+      'EngineContext / SSE usage 增加 estimated；compact 与 session 变更后重置估算占用',
+      'Codex/Cursor 上下文窗口分母改为配置项 AVATAR_CONTEXT_WINDOW_*，不再在业务里硬编码',
+    ],
+  },
+  {
     version: 'v0.3.0',
     date: '2026-09-21',
     items: [

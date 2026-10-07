@@ -27,26 +27,26 @@ func ApplyAgentPolicy(tool string, input map[string]interface{}, dec Decision, p
 	// 联网类工具:策略优先于 Classify 的 Ask
 	if tool == "WebFetch" || tool == "WebSearch" || tool == "Browser" {
 		if p.AllowNetwork {
-			return Decision{Allow, "数字员工已授权联网"}
+			return Decision{Behavior: Allow, Reason: "数字员工已授权联网"}
 		}
-		return Decision{Deny, "数字员工策略禁止联网"}
+		return Decision{Behavior: Deny, Reason: "数字员工策略禁止联网"}
 	}
 
 	if !p.AllowRm && looksLikeRm(tool, cmd) {
-		return Decision{Deny, "数字员工策略禁止 rm 操作"}
+		return Decision{Behavior: Deny, Reason: "数字员工策略禁止 rm 操作"}
 	}
 	if !p.AllowWrite && isWriteTool(tool, cmd, input) {
-		return Decision{Deny, "数字员工策略禁止写入"}
+		return Decision{Behavior: Deny, Reason: "数字员工策略禁止写入"}
 	}
 	if !p.AllowNetwork && isNetworkTool(tool, cmd) {
-		return Decision{Deny, "数字员工策略禁止联网"}
+		return Decision{Behavior: Deny, Reason: "数字员工策略禁止联网"}
 	}
 	if ws := strings.TrimSpace(p.WorkspacePath); ws != "" {
 		if path := toolPath(tool, input); path != "" && !underRoot(path, ws) {
-			return Decision{Deny, "越出绑定工作区:" + path}
+			return Decision{Behavior: Deny, Reason: "越出绑定工作区:" + path}
 		}
 		if tool == "Bash" && cmdHasPathOutside(cmd, ws) {
-			return Decision{Deny, "命令路径越出绑定工作区"}
+			return Decision{Behavior: Deny, Reason: "命令路径越出绑定工作区"}
 		}
 	}
 	return dec

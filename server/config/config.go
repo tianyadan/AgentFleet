@@ -32,6 +32,9 @@ type Config struct {
 	JWTSecret   string // 管理台 JWT HS256 密钥
 	JWTTTLHours int    // JWT 有效小时数
 
+	JevosURL        string
+	JevosTimeoutSec int
+
 	// 数字员工头像 OSS（未配齐则上传接口不可用）
 	OSSEndpoint        string // 如 oss-cn-qingdao.aliyuncs.com
 	OSSAccessKeyID     string
@@ -39,6 +42,11 @@ type Config struct {
 	OSSBucket          string
 	OSSPrefix          string // object 前缀，如 avatars/
 	OSSPublicBase      string // 公网访问根，如 https://digital-employee-qd.cn-qingdao.taihangcda.cn
+
+	// 各引擎默认上下文窗口（Codex/Cursor 无官方 occupancy 时作估算分母；可用环境变量覆盖）
+	ContextWindowClaude int64
+	ContextWindowCodex  int64
+	ContextWindowCursor int64
 }
 
 func getenv(key, def string) string {
@@ -85,7 +93,33 @@ func Load() Config {
 		OSSBucket:          strings.TrimSpace(getenv("AVATAR_OSS_BUCKET", "")),
 		OSSPrefix:          strings.Trim(strings.TrimSpace(getenv("AVATAR_OSS_PREFIX", "avatars/")), "/") + "/",
 		OSSPublicBase:      strings.TrimRight(strings.TrimSpace(getenv("AVATAR_OSS_PUBLIC_BASE", "")), "/"),
+
+		JevosURL:        getenv("AVATAR_JEVOS_URL", "http://127.0.0.1:8017"),
+		JevosTimeoutSec: atoi(getenv("AVATAR_JEVOS_TIMEOUT_SEC", "20")),
+
+		ContextWindowClaude: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "200000"))),
+		ContextWindowCodex:  int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CODEX", "200000"))),
+		ContextWindowCursor: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CURSOR", "200000"))),
 	}
+}
+
+// ContextWindowForEngine 返回引擎默认上下文窗口；未知引擎回退 Claude 窗口。
+func (c Config) ContextWindowForEngine(engine string) int64 {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "codex":
+		if c.ContextWindowCodex > 0 {
+			return c.ContextWindowCodex
+		}
+	case "agent", "cursor":
+		if c.ContextWindowCursor > 0 {
+			return c.ContextWindowCursor
+		}
+	default:
+		if c.ContextWindowClaude > 0 {
+			return c.ContextWindowClaude
+		}
+	}
+	return 200000
 }
 
 // OSSConfigured 头像上传所需 OSS 是否齐全。

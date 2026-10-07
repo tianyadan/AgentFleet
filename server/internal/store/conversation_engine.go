@@ -68,13 +68,17 @@ func (s *Store) SetConversationNeedsSystemReinject(ctx context.Context, convID i
 }
 
 // UpdateConversationEngineMeta 更新引擎 session / 上下文占用。
+// session 只在当前为空时写入，避免子会话 id 覆盖主会话。
 func (s *Store) UpdateConversationEngineMeta(ctx context.Context, convID int64, sessionID string, used, window int64) error {
 	if convID <= 0 {
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE conversations SET
-		  engine_session_id = CASE WHEN ? <> '' THEN ? ELSE engine_session_id END,
+		  engine_session_id = CASE
+		    WHEN (engine_session_id IS NULL OR TRIM(IFNULL(engine_session_id,'')) = '') AND ? <> '' THEN ?
+		    ELSE engine_session_id
+		  END,
 		  engine_used_tokens = CASE WHEN ? > 0 THEN ? ELSE engine_used_tokens END,
 		  engine_window_tokens = CASE WHEN ? > 0 THEN ? ELSE engine_window_tokens END
 		WHERE id=?`,
@@ -94,5 +98,15 @@ func (s *Store) ClearConversationEngineMeta(ctx context.Context, convID int64) e
 		_, err = s.db.ExecContext(ctx,
 			`UPDATE conversations SET engine_session_id=NULL, engine_used_tokens=0, engine_window_tokens=0 WHERE id=?`, convID)
 	}
+	return err
+}
+
+// ResetConversationUsedTokens compact / session reset：清零占用估算，保留 session 与窗口。
+func (s *Store) ResetConversationUsedTokens(ctx context.Context, convID int64) error {
+	if convID <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET engine_used_tokens=0 WHERE id=?`, convID)
 	return err
 }

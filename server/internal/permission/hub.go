@@ -23,6 +23,7 @@ type Request struct {
 	ClientIP  string
 	Meaning   string // AI 解释的命令含义
 	Risk      string // AI 风险评估 low/mid/high
+	Action    ToolAction
 	CreatedAt time.Time
 	Deadline  time.Time
 
@@ -255,7 +256,7 @@ func (h *Hub) broadcast(ev Event) {
 func (h *Hub) Wait(ctx context.Context, id string) Decision {
 	r := h.get(id)
 	if r == nil {
-		return Decision{Deny, "授权请求已失效"}
+		return Decision{Behavior: Deny, Reason: "授权请求已失效"}
 	}
 	timer := time.NewTimer(time.Until(r.Deadline))
 	defer timer.Stop()
@@ -268,21 +269,21 @@ func (h *Hub) Wait(ctx context.Context, id string) Decision {
 	case <-timer.C:
 		h.remove(id)
 		h.broadcastResolved(Resolved{id, "deny", "timeout"})
-		return Decision{Deny, "授权超时,已自动拒绝"}
+		return Decision{Behavior: Deny, Reason: "授权超时,已自动拒绝"}
 	case <-ctx.Done():
 		h.remove(id)
 		h.broadcastResolved(Resolved{id, "deny", "disconnect"})
-		return Decision{Deny, "会话已结束,已自动拒绝"}
+		return Decision{Behavior: Deny, Reason: "会话已结束,已自动拒绝"}
 	}
 }
 
 // Decide 由前端调用,唤醒等待中的 hook。重复调用幂等。
-func (h *Hub) Decide(id string, b Behavior, reason string) error {
+func (h *Hub) Decide(id string, b Behavior, reason string, session bool) error {
 	r := h.get(id)
 	if r == nil {
 		return ErrUnknown
 	}
-	var d = Decision{b, reason}
+	var d = Decision{Behavior: b, Reason: reason, SessionAllow: session}
 	first := false
 	r.once.Do(func() {
 		first = true
@@ -332,7 +333,7 @@ func (h *Hub) drop(match func(*Request) bool, reason string) {
 			r.once.Do(func() {
 				done = true
 				select {
-				case r.ch <- Decision{Deny, reason}:
+				case r.ch <- Decision{Behavior: Deny, Reason: reason}:
 				default:
 				}
 			})
@@ -356,7 +357,7 @@ func (h *Hub) CloseAll() {
 		if r := h.get(id); r != nil {
 			r.once.Do(func() {
 				select {
-				case r.ch <- Decision{Deny, "服务已停止,已自动拒绝"}:
+				case r.ch <- Decision{Behavior: Deny, Reason: "服务已停止,已自动拒绝"}:
 				default:
 				}
 			})

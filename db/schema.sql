@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   user_ip     VARCHAR(64)   NOT NULL,
   mode       VARCHAR(16)    NOT NULL DEFAULT 'single',  -- single / chat
   agent_id   BIGINT        NULL,
-  engine_session_id     VARCHAR(128) NULL,
+  visitor_id BIGINT        NULL,
+  engine_session_id     VARCHAR(512) NULL,
   engine_used_tokens    BIGINT NOT NULL DEFAULT 0,
   engine_window_tokens  BIGINT NOT NULL DEFAULT 0,
   needs_system_reinject TINYINT NOT NULL DEFAULT 0,
@@ -74,6 +75,7 @@ CREATE TABLE IF NOT EXISTS managed_agents (
   schedule_cron   VARCHAR(128)   NOT NULL DEFAULT '',
   schedule_label  VARCHAR(128)   NOT NULL DEFAULT '',
   status          VARCHAR(32)    NOT NULL DEFAULT 'idle', -- idle|running|waiting|error
+  is_receptionist TINYINT        NOT NULL DEFAULT 0,
   conversation_id BIGINT         NULL,
   cloned_from_id  BIGINT         NULL,
   last_error      TEXT           NULL,
@@ -132,6 +134,10 @@ CREATE TABLE IF NOT EXISTS command_audits (
   command_text    TEXT          NOT NULL,
   decision        VARCHAR(16)   NOT NULL,
   decided_by      VARCHAR(32)   NOT NULL,
+  engine          VARCHAR(32)   NOT NULL DEFAULT '',
+  action_type     VARCHAR(64)   NOT NULL DEFAULT '',
+  environment     VARCHAR(128)  NOT NULL DEFAULT '',
+  risk_score      DOUBLE        NOT NULL DEFAULT 0,
   risk            VARCHAR(16)   DEFAULT '',
   meaning         TEXT          NULL,
   note            TEXT          NULL,
@@ -139,6 +145,20 @@ CREATE TABLE IF NOT EXISTS command_audits (
   PRIMARY KEY (id),
   KEY idx_conv_time (conversation_id, created_at),
   KEY idx_agent_time (agent_id, created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS session_permissions (
+  id                 BIGINT        NOT NULL AUTO_INCREMENT,
+  conversation_id    BIGINT        NOT NULL,
+  action_type        VARCHAR(64)   NOT NULL,
+  command_signature  VARCHAR(768)  NOT NULL,
+  working_dir        VARCHAR(1024) NOT NULL DEFAULT '',
+  environment        VARCHAR(128)  NOT NULL DEFAULT '',
+  resource_scope     VARCHAR(1024) NOT NULL DEFAULT '',
+  created_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_conv_sig (conversation_id, command_signature(191)),
+  CONSTRAINT fk_sp_conv FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- 种子: 授权工作区(code 类型 + 数据查询 db 项目)
@@ -280,4 +300,30 @@ CREATE TABLE IF NOT EXISTS agent_memories (
   PRIMARY KEY (id),
   KEY idx_agent_time (agent_id, created_at),
   KEY idx_agent_source (agent_id, source_type, source_id)
+) ENGINE=InnoDB;
+
+-- v0.3.4 前台访客
+CREATE TABLE IF NOT EXISTS visitors (
+  id                      BIGINT       NOT NULL AUTO_INCREMENT,
+  public_id               VARCHAR(64)  NOT NULL,
+  name                    VARCHAR(64)  NOT NULL,
+  current_conversation_id BIGINT       NULL,
+  created_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_visitor_public (public_id),
+  KEY idx_visitor_seen (last_seen_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS visitor_ask_logs (
+  id               BIGINT        NOT NULL AUTO_INCREMENT,
+  visitor_id       BIGINT        NOT NULL,
+  conversation_id  BIGINT        NOT NULL DEFAULT 0,
+  agent_id         BIGINT        NOT NULL DEFAULT 0,
+  ip               VARCHAR(64)   NOT NULL DEFAULT '',
+  user_agent       VARCHAR(512)  NOT NULL DEFAULT '',
+  created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_val_visitor (visitor_id, created_at),
+  KEY idx_val_ip (ip, created_at)
 ) ENGINE=InnoDB;

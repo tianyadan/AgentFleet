@@ -16,3 +16,5 @@ bin/
 .DS_Store
 
 # 前端(node_modules 已在 web/.gitignore)
+
+.superpowers/

@@ -144,6 +144,8 @@ func (s *Service) syncAfterCompact(ctx context.Context, convID int64, keepLatest
 		s.finishCompactAgentStatus(ctx, agentID, prevStatus, convID, started, err)
 		return err
 	}
+	// compact 后引擎上下文已收缩：清零平台估算占用，避免圆环沿用旧 used_tokens
+	s.ResetEngineContextAfterCompact(ctx, agentID, convID)
 	_, err := s.Store.InsertMessage(ctx, &store.Message{
 		ConversationID:     convID,
 		Role:               "assistant",

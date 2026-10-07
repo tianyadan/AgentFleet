@@ -47,6 +47,7 @@ type Service struct {
 	Sched    *Scheduler
 	Memory   MemoryService
 	WF       *WorkflowEngine
+	Gateway  *permission.Gateway
 
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
@@ -73,6 +74,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		cloneJobMap:    &sync.Map{},
 		compactPending: &sync.Map{},
 	}
+	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
 	svc.Sched = NewScheduler(svc)
 	svc.Memory = NewMemoryService(st)
 	svc.WF = newWorkflowEngine(svc)
@@ -93,26 +95,25 @@ func New(cfg config.Config, st *store.Store) *Service {
 	return svc
 }
 
-// HandlePermissionRequest 由 hook 调用:分类工具调用,只读自动放行、灾难自动拒绝、
-// 其余登记为待决请求并阻塞等待前端裁决(超时/断连按拒绝)。
-// policyAgentID>0 时按该数字员工策略裁决(委托场景:会话挂调用方,策略用被调方)。
+// HandlePermissionRequest 统一 Permission Gateway：Hard Deny → Safe → Session → JEVOS → 人工。
 func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, input map[string]interface{}, convID, policyAgentID int64) permission.Decision {
 	if !s.Cfg.PermissionEnabled {
 		return permission.Decision{Behavior: permission.Deny, Reason: "未启用授权代理"}
 	}
-	codeWS, _ := s.Store.CodeWorkspaces(ctx)
-	roots := make([]string, 0, len(codeWS))
-	for _, w := range codeWS {
-		roots = append(roots, w.Path)
+	if s.Gateway == nil {
+		s.Gateway = permission.NewGateway(s.Store, permission.NewJevosClient(s.Cfg.JevosURL, s.Cfg.JevosTimeoutSec))
 	}
-	var agentPolicy *permission.AgentPolicy
-	var policyAgentName string
 	lookupID := policyAgentID
 	if lookupID <= 0 {
 		lookupID, _ = s.Store.ConversationAgentID(ctx, convID)
 	}
+	engine := "claude"
+	cwd := s.Cfg.WorkspaceRoot
+	var agentPolicy *permission.AgentPolicy
+	policyAgentName := ""
 	if lookupID > 0 {
 		if ag, _ := s.Store.GetManagedAgent(ctx, lookupID); ag != nil {
+			engine = ag.Engine
 			p := permission.AgentPolicy{
 				AllowWrite: ag.AllowWrite, AllowNetwork: ag.AllowNetwork, AllowRm: ag.AllowRm,
 				WorkspacePath: ag.WorkspacePath,
@@ -120,84 +121,89 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 			agentPolicy = &p
 			policyAgentName = ag.Name
 			if ws := strings.TrimSpace(ag.WorkspacePath); ws != "" {
-				roots = []string{ws}
+				cwd = ws
 			}
 		}
 	}
-	dec := permission.Classify(tool, input, roots)
-	if agentPolicy != nil {
-		dec = permission.ApplyAgentPolicy(tool, input, dec, *agentPolicy)
-	}
-	if dec.Behavior != permission.Ask {
-		if tool == "Bash" || tool == "WebFetch" || tool == "WebSearch" {
-			decision := "allow"
-			if dec.Behavior == permission.Deny {
-				decision = "deny"
-			}
-			cmdText := str(input, "command")
-			if cmdText == "" {
-				cmdText = summarize(tool, input)
-			}
-			s.recordCommand(ctx, convID, tool, cmdText, decision, "system", "", "", dec.Reason)
-		}
-		return dec
-	}
-	// 编排级「允许执行所有命令」：除 rm 外直接放行，不弹窗
-	if s.Perms.IsAllowAllExceptRm(convID) && !permission.LooksLikeRm(tool, input) {
-		summary := summarize(tool, input)
-		owner, _ := s.Store.ConversationOwner(ctx, convID)
-		s.Perms.AutoApprove(tool, summary, "编排允许全部命令", convID, owner)
-		s.recordCommand(ctx, convID, tool, summary, "allow", "system", "", "", "编排允许全部命令(除rm)")
-		return permission.Decision{Behavior: permission.Allow, Reason: "编排允许全部命令"}
-	}
-	owner, _ := s.Store.ConversationOwner(ctx, convID)
+	action := permission.FromClaude(engine, convID, lookupID, tool, input, cwd)
+	action.PreExec = true
+	opt := permission.EvaluateOpts{Policy: agentPolicy, AllowAllExceptRm: s.Perms.IsAllowAllExceptRm(convID)}
+	pd := s.Gateway.Evaluate(ctx, action, opt)
 	summary := summarize(tool, input)
-
-	note := ""
-	if policyAgentID > 0 && policyAgentName != "" {
-		note = "同事「" + policyAgentName + "」申请授权"
-	}
-	if s.Reviewer != nil && s.Perms.IsAuto(convID) {
-		allow, reason := s.review(ctx, convID, tool, summary, roots)
-		if allow {
-			s.Perms.AutoApprove(tool, summary, reason, convID, owner)
-			s.recordCommand(ctx, convID, tool, summary, "allow", "ai", "", "", reason)
-			return permission.Decision{Behavior: permission.Allow, Reason: "AI 审核放行:" + reason}
+	owner, _ := s.Store.ConversationOwner(ctx, convID)
+	by := pd.DecidedBy
+	if pd.Decision == permission.DecisionAllow {
+		if pd.DecidedBy == permission.DecidedByJevos {
+			s.Perms.AutoApprove(tool, summary, pd.Reason, convID, owner)
 		}
-		aiNote := "AI 建议拒绝:" + reason
+		s.recordPerm(ctx, convID, action, pd, "allow", by, summary, "")
+		return permission.Decision{Behavior: permission.Allow, Reason: pd.Reason}
+	}
+	if pd.Decision == permission.DecisionDeny {
+		s.recordPerm(ctx, convID, action, pd, "deny", by, summary, pd.Reason)
+		return permission.Decision{Behavior: permission.Deny, Reason: pd.Reason}
+	}
+	// 前台访客会话：规则 + JEVOS 之后不再人工，REVIEW 直接拒绝。
+	if isVisitor, _ := s.Store.ConversationHasVisitor(ctx, convID); isVisitor {
+		reason := pd.Reason
 		if reason == "" {
-			aiNote = "AI 审核不可用,请人工确认"
-		}
-		if note != "" {
-			note += " · " + aiNote
+			reason = "前台对话不支持人工授权"
 		} else {
-			note = aiNote
+			reason = "前台对话不支持人工授权 · " + reason
 		}
+		s.recordPerm(ctx, convID, action, pd, "deny", "system", summary, reason)
+		return permission.Decision{Behavior: permission.Deny, Reason: reason}
 	}
-
-	meaning, risk := s.explain(ctx, tool, summary, roots)
-
+	note := pd.Reason
+	if policyAgentID > 0 && policyAgentName != "" {
+		note = "同事「" + policyAgentName + "」申请授权 · " + pd.Reason
+	}
+	meaning, risk := pd.Reason, riskFromScore(pd.RiskScore)
 	req := s.Perms.Register(tool, input, summary, note, convID, owner)
 	req.Meaning = meaning
 	req.Risk = risk
-
+	req.Action = action
 	out := s.Perms.Wait(ctx, req.ID)
-	by := "user"
+	hby := "human"
 	decision := "allow"
 	if out.Behavior != permission.Allow {
 		decision = "deny"
 		if strings.Contains(out.Reason, "超时") {
-			by = "timeout"
+			hby = "timeout"
 		} else if strings.Contains(out.Reason, "会话已结束") {
-			by = "disconnect"
+			hby = "disconnect"
 		}
+	} else if out.SessionAllow {
+		_ = s.Gateway.RememberSession(action)
 	}
-	s.recordCommand(ctx, convID, tool, summary, decision, by, risk, meaning, note)
+	pd.DecidedBy = permission.DecidedByHuman
+	s.recordPerm(ctx, convID, action, pd, decision, hby, summary, note)
 	return out
+}
+
+func riskFromScore(score float64) string {
+	if score <= 0.45 {
+		return "low"
+	}
+	if score >= 0.60 {
+		return "high"
+	}
+	return "mid"
+}
+
+func (s *Service) recordPerm(ctx context.Context, convID int64, a permission.ToolAction, pd permission.PermissionDecision, decision, by, summary, note string) {
+	if by == "" {
+		by = pd.DecidedBy
+	}
+	s.recordCommandEx(ctx, convID, a.ToolName, summary, decision, by, riskFromScore(pd.RiskScore), pd.Reason, note, a, pd.RiskScore)
 }
 
 // recordCommand 写入审计表 + 对话消息 + SSE 广播(允许与拒绝均记录)。
 func (s *Service) recordCommand(ctx context.Context, convID int64, tool, cmd, decision, by, risk, meaning, note string) {
+	s.recordCommandEx(ctx, convID, tool, cmd, decision, by, risk, meaning, note, permission.ToolAction{}, 0)
+}
+
+func (s *Service) recordCommandEx(ctx context.Context, convID int64, tool, cmd, decision, by, risk, meaning, note string, a permission.ToolAction, riskScore float64) {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" && tool != "Bash" {
 		cmd = tool
@@ -206,6 +212,9 @@ func (s *Service) recordCommand(ctx context.Context, convID int64, tool, cmd, de
 		return
 	}
 	agentID, _ := s.Store.ConversationAgentID(ctx, convID)
+	if a.AgentID > 0 {
+		agentID = a.AgentID
+	}
 	_, _ = s.Store.InsertCommandAudit(ctx, &store.CommandAudit{
 		ConversationID: convID,
 		AgentID:        agentID,
@@ -216,6 +225,10 @@ func (s *Service) recordCommand(ctx context.Context, convID int64, tool, cmd, de
 		Risk:           risk,
 		Meaning:        meaning,
 		Note:           note,
+		Engine:         a.Engine,
+		ActionType:     a.ActionType,
+		Environment:    a.Environment,
+		RiskScore:      riskScore,
 	})
 	status := "ok"
 	if decision != "allow" {
@@ -401,8 +414,16 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 		wsPath = matched
 	}
 
-	// v0.2.18：不再拼平台历史；多轮靠引擎 --resume + 本轮问题
+	// 有 engine_session 时 history 留空，靠 resume；丢失时回退平台轮次。
 	history := ""
+	resume := ""
+	if em, err := s.Store.GetConversationEngineMeta(ctx, convID); err == nil {
+		resume = strings.TrimSpace(em.SessionID)
+	}
+	if resume == "" {
+		turns, _ := s.Store.RecentTurns(ctx, convID, 12)
+		history = FormatResumeHistory(turns, req.Question)
+	}
 
 	// 工作目录: 仅取真实文件系统路径。db 数据查询项目(db://...)无对应目录,
 	// 回退到第一个 code 工作区作为 cwd;数据检索由 Agent 通过后端只读接口完成。
@@ -427,10 +448,6 @@ func (s *Service) Ask(ctx context.Context, req QuestionReq, onChunk func(string)
 			ConvID:   convID,
 			TimeoutS: s.Cfg.PermissionWaitSeconds() + 30,
 		}
-	}
-	resume := ""
-	if em, err := s.Store.GetConversationEngineMeta(ctx, convID); err == nil {
-		resume = em.SessionID
 	}
 	onMeta := func(m agent.RunMeta) {
 		s.RememberEngineMeta(context.WithoutCancel(ctx), 0, convID, m)

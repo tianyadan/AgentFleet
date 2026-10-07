@@ -1,6 +1,11 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"colleague-avatar/server/internal/store"
+)
 
 func TestPersistSessionFlagForNoHook(t *testing.T) {
 	// 文档化约定：noHook 轻量调用不得 resume/写 session。
@@ -16,10 +21,24 @@ func TestPersistSessionFlagForNoHook(t *testing.T) {
 	}
 }
 
-// TestAskPromptUsesEmptyHistory 约定：调用引擎时 history 必须为空（由 resume 续聊）。
-func TestAskPromptUsesEmptyHistory(t *testing.T) {
-	history := "" // managed / E-bot 均不得再拼 RecentTurns
-	if history != "" {
-		t.Fatal("v0.2.18 must not inject platform turn history")
+func TestAskPromptUsesEmptyHistoryWhenResuming(t *testing.T) {
+	resume := "sess-1"
+	history := ""
+	if resume != "" && history != "" {
+		t.Fatal("resume 时不得拼平台历史")
+	}
+}
+
+func TestFormatResumeHistorySkipsCurrentQuestion(t *testing.T) {
+	turns := []store.Turn{
+		{User: "第一句", Assistant: "记住了"},
+		{User: "第二句", Assistant: ""},
+	}
+	got := FormatResumeHistory(turns, "第二句")
+	if !strings.Contains(got, "第一句") || !strings.Contains(got, "记住了") {
+		t.Fatalf("got %q", got)
+	}
+	if strings.Contains(got, "第二句") {
+		t.Fatalf("should skip current question: %q", got)
 	}
 }

@@ -270,7 +270,7 @@ func (r *Runner) AskStream(ctx context.Context, dir, systemPrompt, question, his
 		}
 		if meta, ok := ParseClaudeStreamMeta([]byte(line)); ok {
 			if meta.SessionID != "" {
-				lastMeta.SessionID = meta.SessionID
+				lastMeta.SessionID = StickySessionID(lastMeta.SessionID, meta.SessionID)
 			}
 			if meta.InputTokens > 0 || meta.OutputTokens > 0 || meta.ContextWindow > 0 {
 				if meta.InputTokens > 0 {

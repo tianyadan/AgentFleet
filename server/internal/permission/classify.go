@@ -18,8 +18,9 @@ const (
 
 // Decision 一次分类结果。
 type Decision struct {
-	Behavior Behavior `json:"behavior"`
-	Reason   string   `json:"reason"`
+	Behavior     Behavior `json:"behavior"`
+	Reason       string   `json:"reason"`
+	SessionAllow bool     `json:"session_allow,omitempty"`
 }
 
 // 只读文件类工具:命中授权目录即放行。
@@ -75,20 +76,20 @@ var pathKeys = []string{"file_path", "path", "notebook_path", "dir_path", "noteb
 // roots 为已授权的 code 工作区绝对路径;为空时保守要求人工确认。
 func Classify(tool string, input map[string]interface{}, roots []string) Decision {
 	if isCatastrophic(tool, input) {
-		return Decision{Deny, "命中高危命令黑名单,已拒绝"}
+		return Decision{Behavior: Deny, Reason: "命中高危命令黑名单,已拒绝"}
 	}
 
 	switch {
 	case tool == "Bash":
 		return classifyBash(str(input, "command"), roots)
 	case tool == "WebFetch" || tool == "WebSearch":
-		return Decision{Ask, "分身将访问外网(" + tool + "),需你确认"}
+		return Decision{Behavior: Ask, Reason: "分身将访问外网(" + tool + "),需你确认"}
 	case readOnlyTools[tool]:
 		return classifyReadPath(tool, input, roots)
 	case writeTools[tool]:
-		return Decision{Ask, "写操作需你确认:" + tool + " " + briefPath(input)}
+		return Decision{Behavior: Ask, Reason: "写操作需你确认:" + tool + " " + briefPath(input)}
 	default:
-		return Decision{Ask, "未知工具 " + tool + ",需你确认"}
+		return Decision{Behavior: Ask, Reason: "未知工具 " + tool + ",需你确认"}
 	}
 }
 
@@ -97,24 +98,24 @@ func classifyReadPath(tool string, input map[string]interface{}, roots []string)
 	p := pathFromInput(input)
 	if p == "" || !filepath.IsAbs(p) {
 		// 相对路径落在工作目录(已设为授权工作区)内
-		return Decision{Allow, ""}
+		return Decision{Behavior: Allow, Reason: ""}
 	}
 	for _, r := range roots {
 		if within(p, r) {
-			return Decision{Allow, ""}
+			return Decision{Behavior: Allow, Reason: ""}
 		}
 	}
 	if len(roots) == 0 {
-		return Decision{Ask, "未配置授权目录,读取 " + p + " 需你确认"}
+		return Decision{Behavior: Ask, Reason: "未配置授权目录,读取 " + p + " 需你确认"}
 	}
-	return Decision{Ask, "越出授权目录:" + p}
+	return Decision{Behavior: Ask, Reason: "越出授权目录:" + p}
 }
 
 // classifyBash 判定 shell 命令:纯只读链放行,含写/未知/联网弹窗。
 func classifyBash(cmd string, roots []string) Decision {
 	c := strings.TrimSpace(cmd)
 	if c == "" {
-		return Decision{Ask, "空命令,需你确认"}
+		return Decision{Behavior: Ask, Reason: "空命令,需你确认"}
 	}
 	low := strings.ToLower(c)
 
@@ -122,12 +123,12 @@ func classifyBash(cmd string, roots []string) Decision {
 	scrubbed := strings.ReplaceAll(low, "2>/dev/null", "")
 	scrubbed = strings.ReplaceAll(scrubbed, "2>&1", "")
 	if strings.Contains(scrubbed, ">") {
-		return Decision{Ask, "命令含输出重定向(会写文件)"}
+		return Decision{Behavior: Ask, Reason: "命令含输出重定向(会写文件)"}
 	}
 
 	segs := splitSegments(c)
 	if len(segs) == 0 {
-		return Decision{Ask, "无法解析命令"}
+		return Decision{Behavior: Ask, Reason: "无法解析命令"}
 	}
 	for _, seg := range segs {
 		fields := strings.Fields(seg)
@@ -136,34 +137,34 @@ func classifyBash(cmd string, roots []string) Decision {
 		}
 		bin := filepath.Base(strings.Trim(fields[0], `"'`))
 		if strings.HasPrefix(bin, "./") || strings.HasPrefix(bin, "/") {
-			return Decision{Ask, "命令含本地可执行文件:" + fields[0]}
+			return Decision{Behavior: Ask, Reason: "命令含本地可执行文件:" + fields[0]}
 		}
 		switch {
 		case bin == "git":
 			sub, extra := gitSubcommand(fields[1:], roots)
 			if extra != "" {
-				return Decision{Ask, extra}
+				return Decision{Behavior: Ask, Reason: extra}
 			}
 			if !gitReadOnly[sub] {
-				return Decision{Ask, "git 写操作:git " + sub}
+				return Decision{Behavior: Ask, Reason: "git 写操作:git " + sub}
 			}
 		case bin == "sed":
 			if hasInPlaceFlag(fields[1:]) {
-				return Decision{Ask, "sed 原地修改文件(-i)"}
+				return Decision{Behavior: Ask, Reason: "sed 原地修改文件(-i)"}
 			}
 		case bin == "find":
 			if containsAny(lower(fields), "-delete", "-exec", "-execok", "-ok", "-fprint", "-fls") {
-				return Decision{Ask, "find 带删除/执行动作"}
+				return Decision{Behavior: Ask, Reason: "find 带删除/执行动作"}
 			}
 		case bin == "curl" || bin == "wget":
 			if !isLocalDataAPI(seg) {
-				return Decision{Ask, "非本机数据查询的网络访问"}
+				return Decision{Behavior: Ask, Reason: "非本机数据查询的网络访问"}
 			}
 		case !readOnlyCmds[bin]:
-			return Decision{Ask, "非只读命令:" + bin}
+			return Decision{Behavior: Ask, Reason: "非只读命令:" + bin}
 		}
 	}
-	return Decision{Allow, ""}
+	return Decision{Behavior: Allow, Reason: ""}
 }
 
 // isLocalDataAPI 仅允许访问本机后端只读数据查询接口。

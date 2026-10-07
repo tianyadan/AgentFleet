@@ -60,7 +60,10 @@ func ParseCodexJSONLLine(line []byte) (CodexEvent, bool) {
 
 	switch typ {
 	case "thread.started":
-		sid, _ := raw["thread_id"].(string)
+		sid := ExtractSessionID(raw)
+		if sid == "" {
+			sid, _ = raw["thread_id"].(string)
+		}
 		if sid != "" {
 			ev.Meta = &RunMeta{SessionID: sid}
 			ok = true
@@ -136,11 +139,13 @@ func ParseCodexJSONLLine(line []byte) (CodexEvent, bool) {
 	case "turn.completed":
 		usage, _ := raw["usage"].(map[string]interface{})
 		if usage != nil {
+			// 本轮 turn usage，不是真实 context occupancy；Estimated 由 NormalizeRunMetaContext 统一标记。
 			m := RunMeta{
 				InputTokens:  jsonInt64(usage["input_tokens"]),
 				OutputTokens: jsonInt64(usage["output_tokens"]),
 				CacheRead:    jsonInt64(usage["cached_input_tokens"]),
 				CacheWrite:   jsonInt64(usage["cache_write_input_tokens"]),
+				Estimated:    true,
 			}
 			m.UsedTokens = m.InputTokens
 			if m.UsedTokens == 0 {
@@ -224,6 +229,13 @@ func CodexAskMetaEx(ctx context.Context, bin, dir, systemPrompt, question, histo
 		onActivity(Activity{Tool: "codex", Summary: "Codex 执行中…"})
 	}
 	fallbackArgs := CodexArgs(dir, prompt, false)
+	if rs := strings.TrimSpace(resumeThread); rs != "" {
+		fallbackArgs = []string{"exec", "--skip-git-repo-check", "-s", "workspace-write", "--dangerously-bypass-hook-trust"}
+		if strings.TrimSpace(dir) != "" {
+			fallbackArgs = append(fallbackArgs, "-C", dir)
+		}
+		fallbackArgs = append(fallbackArgs, "resume", rs, prompt)
+	}
 	cmd := exec.CommandContext(cctx, bin, fallbackArgs...)
 	AttachKillable(cmd)
 	if dir != "" {
@@ -303,7 +315,7 @@ func runCodexJSONStream(
 		sawJSON = true
 		if ev.Meta != nil {
 			if ev.Meta.SessionID != "" {
-				lastMeta.SessionID = ev.Meta.SessionID
+				lastMeta.SessionID = StickySessionID(lastMeta.SessionID, ev.Meta.SessionID)
 			}
 			if ev.Meta.InputTokens > 0 || ev.Meta.OutputTokens > 0 {
 				lastMeta.InputTokens = ev.Meta.InputTokens

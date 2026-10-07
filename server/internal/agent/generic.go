@@ -62,7 +62,12 @@ func GenericAskMeta(ctx context.Context, bin, dir, systemPrompt, question, histo
 		argsText = append(argsText, prompt)
 		out2, err2 := runOnce(cctx, bin, dir, argsText)
 		if err2 != nil {
-			out3, err3 := runOnce(cctx, bin, dir, []string{prompt})
+			argsBare := []string{}
+			if rs := strings.TrimSpace(resumeSession); rs != "" {
+				argsBare = append(argsBare, "--resume", rs)
+			}
+			argsBare = append(argsBare, prompt)
+			out3, err3 := runOnce(cctx, bin, dir, argsBare)
 			if err3 != nil {
 				return "", int(time.Since(start).Milliseconds()), fmt.Errorf("%v; fallback: %v; %v", err, err2, err3)
 			}
@@ -112,7 +117,7 @@ func ParseCursorPrintOutput(raw string) (text string, meta RunMeta) {
 	if json.Unmarshal([]byte(lastObj), &m) != nil {
 		return raw, meta
 	}
-	if sid, _ := m["session_id"].(string); sid != "" {
+	if sid := ExtractSessionID(m); sid != "" {
 		meta.SessionID = sid
 	}
 	if r, ok := m["result"].(string); ok {
@@ -133,7 +138,9 @@ func ParseCursorPrintOutput(raw string) (text string, meta RunMeta) {
 		}
 		meta.CacheWrite = jsonInt64(u["cacheWriteTokens"])
 	}
+	// Cursor 仅有本轮 usage，无 active context API → 估算。
 	meta.UsedTokens = meta.InputTokens + meta.CacheRead
+	meta.Estimated = true
 	if text == "" {
 		text = raw
 	}

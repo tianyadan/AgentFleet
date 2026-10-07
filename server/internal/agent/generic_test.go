@@ -16,6 +16,14 @@ func TestParseCursorPrintOutput(t *testing.T) {
 	}
 }
 
+func TestParseCursorPrintOutputSessionIdCamel(t *testing.T) {
+	raw := `{"result":"ok","sessionId":"chat-xyz"}`
+	_, meta := ParseCursorPrintOutput(raw)
+	if meta.SessionID != "chat-xyz" {
+		t.Fatalf("session=%q", meta.SessionID)
+	}
+}
+
 func TestParseCursorPrintOutputPlain(t *testing.T) {
 	text, meta := ParseCursorPrintOutput("just plain")
 	if text != "just plain" || meta.SessionID != "" {

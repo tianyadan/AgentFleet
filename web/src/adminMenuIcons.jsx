@@ -89,6 +89,15 @@ function iconBody(name) {
           <path d="m7 14 4-4 3 3 5-6" />
         </>
       )
+    case 'manual':
+      return (
+        <>
+          <path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v17.5H7.5A2.5 2.5 0 0 0 5 22Z" />
+          <path d="M5 4.5v15" />
+          <path d="M9 7h7" />
+          <path d="M9 11h7" />
+        </>
+      )
     case 'changelog':
       return (
         <>

@@ -41,11 +41,20 @@ func (h *Handler) Register(r *gin.Engine) {
 		api.POST("/auth/logout", h.Logout)
 		api.GET("/auth/me", auth.RequireAdminJWT(h.svc.Cfg.JWTSecret), h.Me)
 
-		// 公开:对话必需
+		// 公开:对话必需（旧 E-bot 接口保留兼容）
 		api.POST("/question", h.Question)
 		api.POST("/conversations", h.CreateConversation)
 		api.POST("/conversations/:id/compress", h.ConversationCompress)
 		api.GET("/workspaces", h.Workspaces)
+
+		// 公开:前台助理 + 访客登记
+		api.GET("/public/receptionist", h.PublicReceptionist)
+		api.GET("/public/visitor/me", h.PublicVisitorMe)
+		api.POST("/public/visitor/register", h.PublicVisitorRegister)
+		api.GET("/public/messages", h.PublicVisitorMessages)
+		api.POST("/public/conversations/new", h.PublicNewConversation)
+		api.POST("/public/ask", h.PublicAsk)
+		api.GET("/public/context", h.PublicContext)
 		// 多 Agent 上报/查询保持公开(外部 agent 与 E-bot 经 curl 调用)
 		api.POST("/agents/tasks", h.AgentTaskReport)
 		api.GET("/agents/tasks", h.AgentTaskList)
@@ -70,6 +79,9 @@ func (h *Handler) Register(r *gin.Engine) {
 			adm.DELETE("/admin/agents/:id/avatar", h.AdminAgentsClearAvatar)
 			adm.PATCH("/admin/agents/:id", h.AdminAgentsUpdate)
 			adm.DELETE("/admin/agents/:id", h.AdminAgentsDelete)
+			adm.POST("/admin/agents/batch-delete", h.AdminAgentsBatchDelete)
+			adm.POST("/admin/agents/:id/receptionist", h.AdminAgentsSetReceptionist)
+			adm.DELETE("/admin/agents/:id/receptionist", h.AdminAgentsClearReceptionist)
 			adm.GET("/admin/agents/:id/messages", h.AdminAgentsMessages)
 			adm.GET("/admin/agents/:id/file", h.AdminAgentsFile)
 			adm.GET("/admin/agents/:id/status", h.AdminAgentsStatus)
@@ -501,7 +513,8 @@ func (h *Handler) PermissionDecide(c *gin.Context) {
 		return
 	}
 	b := parseBehavior(body.Behavior)
-	if err := h.svc.Perms.Decide(body.RequestID, b, "user"); err != nil {
+	session := strings.EqualFold(body.Behavior, "allow_session")
+	if err := h.svc.Perms.Decide(body.RequestID, b, "user", session); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "unknown or already resolved"})
 		return
 	}
@@ -511,7 +524,7 @@ func (h *Handler) PermissionDecide(c *gin.Context) {
 // parseBehavior 把前端字符串转成裁决枚举(仅 allow 放行,其余视为拒绝)。
 func parseBehavior(s string) permission.Behavior {
 	// 仅当以 'a' 开头(即 "allow")时放行;"deny"/空/非法一律拒绝。
-	if len(s) > 0 && s[0] == 'a' {
+	if strings.EqualFold(s, "allow") || strings.EqualFold(s, "allow_session") {
 		return permission.Allow
 	}
 	return permission.Deny

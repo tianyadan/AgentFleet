@@ -72,9 +72,10 @@ export function PermissionCard({ p, more = 0, busy, onDecide, title }) {
       {more > 0 && <div className="perm-more">+{more} 条排队中</div>}
       <div className="perm-actions">
         <button type="button" className="deny" disabled={busy} onClick={() => onDecide(p.request_id, 'deny')}>拒绝</button>
-        <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow')}>仅本次同意</button>
+        <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow')}>本次允许</button>
+        <button type="button" className="allow" disabled={busy} onClick={() => onDecide(p.request_id, 'allow_session')}>本次会话允许</button>
       </div>
-      <div className="perm-hint">授权仅对本次调用生效,超时将自动拒绝。绿/黄/红表示风险：无害 / 需注意 / 高风险。</div>
+      <div className="perm-hint">Hard Deny 规则始终生效。「本次会话允许」只授权当前规范化命令签名，不扩大到同类命令。超时自动拒绝。</div>
     </div>
   )
 }

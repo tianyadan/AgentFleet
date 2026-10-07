@@ -86,6 +86,8 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	// noHook：拆分/摘要等轻量调用，禁止污染主会话 engine_session（否则 Claude resume 会卡在「只输出 JSON」）
 	persistSession := !noHook && metaConv > 0
 	onMeta := func(m agent.RunMeta) {
+		// 规范化为本轮估算（不累计）；窗口缺省时用统一配置
+		m = agent.NormalizeRunMetaContext(a.Engine, m, s.Cfg.ContextWindowForEngine(a.Engine))
 		if persistSession {
 			s.RememberEngineMeta(context.WithoutCancel(ctx), a.ID, metaConv, m)
 		}
@@ -99,13 +101,20 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			"cache_write_tokens": m.CacheWrite,
 			"used_tokens":        m.UsedTokens,
 			"window_tokens":      m.ContextWindow,
+			"used_percent":       agent.PercentOf(m.UsedTokens, m.ContextWindow),
+			"estimated":          true, // SSE 来自 turn usage，恒为估算；Claude 真值靠 /context 刷新
 			"turn_tokens":        turn,
 		})
 	}
 	resume := ""
 	if persistSession {
 		if em, err := s.Store.GetConversationEngineMeta(ctx, metaConv); err == nil {
-			resume = em.SessionID
+			resume = strings.TrimSpace(em.SessionID)
+		}
+		// resume 缺失时才拼平台历史，避免第二轮变成「只有当前问题」的新会话。
+		if resume == "" && strings.TrimSpace(history) == "" {
+			turns, _ := s.Store.RecentTurns(ctx, metaConv, 12)
+			history = FormatResumeHistory(turns, question)
 		}
 	}
 	switch strings.ToLower(a.Engine) {
@@ -130,7 +139,10 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		}
 		return r.AskStream(ctx, dir, sys, question, history, onChunk, timeout, hook, onActivity, onMeta, resume)
 	case "codex":
-		// 不写项目 .codex/hooks：Pre/PostCompact 会与 ask 竞态清库，导致「回复完过一会消失」。
+		if !noHook && s.Cfg.HookBin != "" && metaConv > 0 {
+			agent.EnsureCodexPermissionHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, metaConv)
+		}
+		// 不写项目 .codex Compact hooks：Pre/PostCompact 会与 ask 竞态清库。
 		// 仅监听 JSONL compaction，并延后到 finishManagedAsk 之后再同步。
 		onCmd := func(ev agent.CodexCommandEvent) {
 			if !ev.Done {
@@ -143,11 +155,12 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 			emitAsk(onEvent, map[string]any{
 				"type": "command", "tool_name": "Bash", "summary": summary,
 				"decision": "allow", "decided_by": "codex",
-				"risk": "low", "meaning": "Codex 已执行命令",
+				"risk": "low", "meaning": "Codex 已执行命令（未保证执行前拦截）",
+				"pre_exec_intercept": false,
 				"output": ev.Output, "exit_code": ev.ExitCode,
 			})
 			if metaConv > 0 {
-				s.recordCommand(context.WithoutCancel(ctx), metaConv, "Bash", summary, "allow", "codex", "low", "Codex 已执行命令", strings.TrimSpace(ev.Output))
+				s.recordCommand(context.WithoutCancel(ctx), metaConv, "Bash", summary, "allow", "codex", "low", "Codex 已执行命令（未保证执行前拦截）", strings.TrimSpace(ev.Output))
 			}
 		}
 		onCompact := func() {
@@ -337,4 +350,29 @@ func (s *Service) summarizeForCallee(ctx context.Context, caller *store.ManagedA
 		return truncate(r.Content, 200)
 	}
 	return truncate(out, 300)
+}
+
+// FormatResumeHistory 仅在引擎 session 丢失时把平台轮次拼进 prompt。
+// 当前问题已作为 question 传入，末尾无回复的同一句用户消息不重复。
+func FormatResumeHistory(turns []store.Turn, currentQuestion string) string {
+	currentQuestion = strings.TrimSpace(currentQuestion)
+	var b strings.Builder
+	for _, t := range turns {
+		u := strings.TrimSpace(t.User)
+		a := strings.TrimSpace(t.Assistant)
+		if u == "" {
+			continue
+		}
+		if a == "" && currentQuestion != "" && u == currentQuestion {
+			continue
+		}
+		b.WriteString("用户：")
+		b.WriteString(u)
+		if a != "" {
+			b.WriteString("\n助手：")
+			b.WriteString(a)
+		}
+		b.WriteString("\n\n")
+	}
+	return strings.TrimSpace(b.String())
 }

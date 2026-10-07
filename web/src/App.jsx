@@ -7,6 +7,9 @@ import { anyAgentLoading, allPendingPerms, getAgentSession, listSessionAgentIds,
 import { WorkflowPanel } from './workflow/index.js'
 import WorkflowPermOverlay, { useWorkflowBadges } from './workflow/WorkflowPermOverlay.jsx'
 import { AdminMenuIcon } from './adminMenuIcons.jsx'
+import ProductManual from './ProductManual.jsx'
+import PublicHome from './PublicHome.jsx'
+import DigitalHumanCards from './DigitalHumanCards.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -16,12 +19,20 @@ marked.setOptions({ breaks: true, gfm: true })
 const ADMIN_MENUS = [
   { id: 'history', label: '历史' },
   { id: 'stats', label: '统计' },
-  { id: 'agents', label: '数字员工管理' },
+  {
+    id: 'digital',
+    label: '数字人',
+    children: [
+      { id: 'agents', label: '对话' },
+      { id: 'agents-manage', label: '数字人管理' },
+    ],
+  },
   { id: 'plans', label: '项目协作' },
   { id: 'memos', label: '备忘录' },
   { id: 'passwords', label: '常用密码' },
   { id: 'servers', label: '服务器' },
   { id: 'analytics', label: '数据分析' },
+  { id: 'manual', label: '产品手册' },
   { id: 'changelog', label: '版本' },
 ]
 
@@ -31,6 +42,10 @@ export default function App() {
   const [username, setUsername] = useState('')
   const [view, setView] = useState('chat') // chat | admin
   const [adminMenu, setAdminMenu] = useState('agents')
+  const [digitalOpen, setDigitalOpen] = useState(true)
+  const [focusAgentId, setFocusAgentId] = useState(0)
+  const [openAgentSettings, setOpenAgentSettings] = useState(false)
+  const [openHire, setOpenHire] = useState(false)
   const [jumpWorkflowRunId, setJumpWorkflowRunId] = useState(0)
   const [loginOpen, setLoginOpen] = useState(false)
   const [loginUser, setLoginUser] = useState('tianhaowen')
@@ -96,6 +111,8 @@ export default function App() {
         }
         const d = await r.json()
         setUsername(d.username || '')
+        setAdminMenu('agents')
+        setDigitalOpen(true)
         setView('admin')
       })
       .catch(() => { if (!cancelled) clearAuth('') })
@@ -127,6 +144,7 @@ export default function App() {
       setLoginPass('')
       setLoginOpen(false)
       setAdminMenu('agents')
+      setDigitalOpen(true)
       setView('admin')
       setError('')
     } catch {
@@ -674,9 +692,21 @@ export default function App() {
   // —— 管理菜单 ——
   function switchAdminMenu(id) {
     setAdminMenu(id)
+    if (id === 'agents' || id === 'agents-manage') setDigitalOpen(true)
     if (id === 'history') loadSessions(1)
     if (id === 'stats') loadStats()
     if (id === 'changelog') setClPage(1)
+  }
+
+  function menuLabel(id) {
+    for (const m of ADMIN_MENUS) {
+      if (m.id === id) return m.label
+      if (m.children) {
+        const c = m.children.find((x) => x.id === id)
+        if (c) return c.label
+      }
+    }
+    return ''
   }
 
   async function loadStats() {
@@ -760,37 +790,76 @@ export default function App() {
             >
               {adminCollapsed ? '»' : '« 折叠'}
             </button>
-            {ADMIN_MENUS.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                className={adminMenu === m.id ? 'active' : ''}
-                onClick={() => switchAdminMenu(m.id)}
-                title={m.label}
-              >
-                <span className="admin-side-main">
-                  <AdminMenuIcon name={m.id} />
-                  <span className="admin-side-label">{m.label}</span>
-                </span>
-                <span className="admin-side-badges">
-                  {m.id === 'agents' && pendingPermCount > 0 && (
-                    <span className="admin-badge admin-badge-perm" title="待授权命令">{pendingPermCount}</span>
-                  )}
-                  {m.id === 'agents' && workflowBusyCount > 0 && (
-                    <span className="admin-badge admin-badge-workflow" title="项目协作忙碌">{workflowBusyCount}</span>
-                  )}
-                  {m.id === 'agents' && runningCount > 0 && (
-                    <span className="admin-badge" title="直接运行中">{runningCount}</span>
-                  )}
-                  {m.id === 'plans' && wfBadges.pending > 0 && (
-                    <span className="admin-badge admin-badge-perm" title="团队待授权命令">{wfBadges.pending}</span>
-                  )}
-                  {m.id === 'plans' && wfBadges.running > 0 && (
-                    <span className="admin-badge" title="运行中团队">{wfBadges.running}</span>
-                  )}
-                </span>
-              </button>
-            ))}
+            {ADMIN_MENUS.map((m) => {
+              if (m.children) {
+                const childActive = m.children.some((c) => c.id === adminMenu)
+                return (
+                  <div key={m.id} className={`admin-side-group ${childActive ? 'active-group' : ''}`}>
+                    <button
+                      type="button"
+                      className={childActive ? 'active' : ''}
+                      onClick={() => {
+                        setDigitalOpen((v) => (childActive ? !v : true))
+                        if (!childActive) switchAdminMenu('agents')
+                      }}
+                      title={m.label}
+                    >
+                      <span className="admin-side-main">
+                        <AdminMenuIcon name="agents" />
+                        <span className="admin-side-label">{m.label}</span>
+                      </span>
+                      <span className="admin-side-badges">
+                        {pendingPermCount > 0 && (
+                          <span className="admin-badge admin-badge-perm" title="待授权命令">{pendingPermCount}</span>
+                        )}
+                        {workflowBusyCount > 0 && (
+                          <span className="admin-badge admin-badge-workflow" title="项目协作忙碌">{workflowBusyCount}</span>
+                        )}
+                        {runningCount > 0 && (
+                          <span className="admin-badge" title="直接运行中">{runningCount}</span>
+                        )}
+                      </span>
+                    </button>
+                    {digitalOpen && (
+                      <div className="admin-side-sub">
+                        {m.children.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            className={adminMenu === c.id ? 'active' : ''}
+                            onClick={() => switchAdminMenu(c.id)}
+                          >
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              }
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={adminMenu === m.id ? 'active' : ''}
+                  onClick={() => switchAdminMenu(m.id)}
+                  title={m.label}
+                >
+                  <span className="admin-side-main">
+                    <AdminMenuIcon name={m.id} />
+                    <span className="admin-side-label">{m.label}</span>
+                  </span>
+                  <span className="admin-side-badges">
+                    {m.id === 'plans' && wfBadges.pending > 0 && (
+                      <span className="admin-badge admin-badge-perm" title="团队待授权命令">{wfBadges.pending}</span>
+                    )}
+                    {m.id === 'plans' && wfBadges.running > 0 && (
+                      <span className="admin-badge" title="运行中团队">{wfBadges.running}</span>
+                    )}
+                  </span>
+                </button>
+              )
+            })}
           </aside>
           <main className="admin-main">
             {adminMenu === 'history' && (
@@ -854,12 +923,30 @@ export default function App() {
                 authHeaders={authHeaders}
                 onUnauthorized={() => clearAuth('登录已过期')}
                 active={adminMenu === 'agents'}
+                focusAgentId={focusAgentId}
+                openSettings={openAgentSettings}
+                onFocusConsumed={() => { setFocusAgentId(0); setOpenAgentSettings(false) }}
+                openHire={openHire}
+                onHireConsumed={() => setOpenHire(false)}
                 onOpenWorkflowRun={(runId) => {
                   setJumpWorkflowRunId(runId)
                   setAdminMenu('plans')
                 }}
               />
             </div>
+            {adminMenu === 'agents-manage' && (
+              <DigitalHumanCards
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'agents-manage'}
+                onHire={() => { setOpenHire(true); switchAdminMenu('agents') }}
+                onOpenSettings={(a) => {
+                  setFocusAgentId(a.id)
+                  setOpenAgentSettings(true)
+                  switchAdminMenu('agents')
+                }}
+              />
+            )}
             <div style={{ display: adminMenu === 'plans' ? 'block' : 'none' }}>
               <WorkflowPanel
                 authHeaders={authHeaders}
@@ -868,6 +955,7 @@ export default function App() {
                 onJumpConsumed={() => setJumpWorkflowRunId(0)}
               />
             </div>
+            {adminMenu === 'manual' && <ProductManual />}
             {adminMenu === 'changelog' && (() => {
               const total = CHANGELOG.length
               const pages = Math.max(1, Math.ceil(total / CHANGELOG_PAGE_SIZE))
@@ -895,16 +983,16 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['history', 'stats', 'agents', 'plans', 'changelog'].includes(adminMenu) && (
+            {!['history', 'stats', 'agents', 'agents-manage', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
-                <h2>{ADMIN_MENUS.find((m) => m.id === adminMenu)?.label || ''}</h2>
+                <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>
               </section>
             )}
             {error && <pre className="error">{error}</pre>}
           </main>
         </div>
-        {adminMenu !== 'agents' && (
+        {adminMenu !== 'agents' && adminMenu !== 'agents-manage' && (
           <ManagedAgentPermOverlay
             authHeaders={authHeaders}
             onUnauthorized={() => clearAuth('登录已过期')}
@@ -921,20 +1009,12 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <h1>🤖 E-bot</h1>
-        <nav className="topbar-nav">
-          <span className="brand-slogan">多智协同，分身执行</span>
-          <div className="topbar-actions">
-            {authToken ? (
-              <button type="button" onClick={() => { setView('admin'); setAdminMenu('agents') }}>管理台</button>
-            ) : (
-              <button type="button" onClick={() => { setLoginErr(''); setLoginOpen(true) }}>登录</button>
-            )}
-          </div>
-        </nav>
-      </header>
+    <div className="app app-public">
+      <PublicHome
+        authToken={authToken}
+        onLogin={() => { setLoginErr(''); setLoginOpen(true) }}
+        onOpenAdmin={() => { setView('admin'); setAdminMenu('agents'); setDigitalOpen(true) }}
+      />
 
       {loginOpen && (
         <div className="modal-mask" onClick={() => !loginBusy && setLoginOpen(false)}>
@@ -957,135 +1037,7 @@ export default function App() {
         </div>
       )}
 
-      <section className="ask">
-          {/* 模式切换 + 新建对话 */}
-          <div className="modebar">
-            <div className="modes">
-              <button className={mode === 'single' ? 'active' : ''} onClick={() => switchMode('single')}>单次询问</button>
-              <button className={mode === 'chat' ? 'active' : ''} onClick={() => switchMode('chat')}>长对话</button>
-            </div>
-            <div className="modebar-right">
-              <label className={`auto-switch ${autoSaving ? 'busy' : ''}`} title="开启后由 AI 审核权限,只有拿不准才弹窗">
-                <input type="checkbox" checked={autoOn} disabled={autoSaving} onChange={(e) => toggleAuto(e.target.checked)} />
-                <span className="slider" />
-                <span className="auto-label">AI 自动审核</span>
-              </label>
-              {mode === 'chat' && (
-                <>
-                  <button
-                    className="new"
-                    type="button"
-                    disabled={!currentConvId || compressing || loading}
-                    onClick={compressConversation}
-                    title="调用引擎原生压缩，保留会话"
-                  >
-                    {compressing ? '压缩中…' : '压缩'}
-                  </button>
-                  <button className="new" onClick={newConversation}>＋ 新建对话</button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* 当前长对话提示 */}
-          {mode === 'chat' && (
-            <div className="conv-badge">
-              {currentConvId ? `当前会话 #${currentConvId} · 引擎续聊` : '请点击右上角「新建对话」开始'}
-            </div>
-          )}
-
-          {/* 聊天区 */}
-          <div className="chatbox" ref={boxRef} onScroll={onChatScroll}>
-            {chatLog.length === 0 && (
-              <div className="opening" dangerouslySetInnerHTML={{ __html: marked.parse(OPENING) }} />
-            )}
-            {chatLog.map((m, i) => (
-              m.role === 'divider' ? (
-                <div key={i} className="turn-divider" role="separator">
-                  <span>{m.content || '本轮询问已结束'}</span>
-                </div>
-              ) : (
-              <div key={i} className={`msg ${m.role}`}>
-                <div className="msg-label">
-                  <span>{m.role === 'user' ? '你' : (m.role === 'auto' ? '自动审核' : (m.role === 'command' ? '已执行命令' : 'E-bot'))}</span>
-                  <span className="msg-time">{m.time ? new Date(m.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
-                  {m.replySec > 0 && <span className="reply-sec">回复 {fmtSec(m.replySec)}</span>}
-                </div>
-                {m.role === 'auto' ? (
-                  <div className="auto-trace">🤖 {m.note || 'AI 已自动放行'} <code>{m.content}</code></div>
-                ) : m.role === 'command' ? (
-                  <div className="cmd-msg"><code>{m.content}</code><button className="cmd-copy" onClick={() => copyText(m.content)}>复制</button></div>
-                ) : (
-                  <div className="msg-body"
-                    dangerouslySetInnerHTML={{ __html: m.role === 'user' ? escapeHtml(m.content) : marked.parse(m.content) }}
-                  />
-                )}
-              </div>
-              )
-            ))}
-            {loading && (
-              <p className="thinking">{interrupting ? `⏳ 打断中… ${taskSec}s` : `思考中… ${taskSec}s(可输入新消息打断)`}</p>
-            )}
-            {permQueue[0] && (
-              <div className="perm-card">
-                <div className="perm-title">
-                  🔐 E-bot 申请使用工具,需要你授权
-                  <span className={`perm-count ${remainSec(permQueue[0]) <= 10 ? 'urgent' : ''}`}>
-                    剩余 {remainSec(permQueue[0])}s
-                  </span>
-                </div>
-                {permQueue[0].note && <div className="perm-note">{permQueue[0].note}</div>}
-                <div className="perm-tool">{permQueue[0].tool_name}</div>
-                <pre className="perm-summary">{permQueue[0].summary}</pre>
-                {(permQueue[0].meaning || permQueue[0].risk) && (
-                  <div className="perm-review">
-                    {permQueue[0].meaning && <div className="perm-meaning">💬 含义：{permQueue[0].meaning}</div>}
-                    {permQueue[0].risk && (
-                      <div className={`perm-risk risk-${permQueue[0].risk}`}>
-                        ⚠️ 风险：<b>{riskLabel(permQueue[0].risk)}</b>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {permQueue.length > 1 && <div className="perm-more">+{permQueue.length - 1} 条排队中</div>}
-                <div className="perm-actions">
-                  <button className="deny" onClick={() => decide(permQueue[0].request_id, 'deny')}>拒绝</button>
-                  <button className="allow" onClick={() => decide(permQueue[0].request_id, 'allow')} disabled={permBusy}>
-                    仅本次同意
-                  </button>
-                </div>
-                <div className="perm-hint">授权仅对本次调用生效,超时将自动拒绝。</div>
-              </div>
-            )}
-          </div>
-
-          <textarea
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={mode === 'chat' ? '继续提问(Enter 发送, Shift+Enter 换行)' : '例如：kfi-cloud-api 里的订单公式？(Enter 发送)'}
-            rows={3}
-          />
-          <div className="row">
-            <select value={workspace} onChange={(e) => setWorkspace(e.target.value)}>
-              <option value="">全部授权工作区</option>
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.path}>{w.name}</option>
-              ))}
-            </select>
-            {loading && (
-              <button className="stop" onClick={stop} disabled={!loading}>■ 终止</button>
-            )}
-            <button onClick={ask}>{loading ? '↪ 插话' : '发送'}</button>
-            {lastFailedQuestion && !loading && (
-              <button className="retry" onClick={retry}>↻ 重试</button>
-            )}
-          </div>
-          {error && <pre className="error">{error}</pre>}
-        </section>
-
-      <footer className="app-footer">当前版本 {CURRENT_VERSION}</footer>
-      {/* 登出后仍挂载隐藏面板,保持订阅;授权浮层可在对话页裁决 */}
+      <footer className="app-footer ph-footer">当前版本 {CURRENT_VERSION}</footer>
       <div style={{ display: 'none' }} aria-hidden>
         <ManagedAgentsPanel
           authHeaders={authHeaders}

@@ -119,9 +119,12 @@ function statusClass(st) {
 }
 
 /**
- * 管理台「数字员工管理」：授权弹窗、自动审核、分页、插话、设置。
+ * 管理台「数字人 · 对话」：授权弹窗、自动审核、分页、插话、设置。
  */
-export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active = true, onOpenWorkflowRun }) {
+export default function ManagedAgentsPanel({
+  authHeaders, onUnauthorized, active = true, onOpenWorkflowRun,
+  focusAgentId = 0, onFocusConsumed, openHire = false, onHireConsumed, openSettings = false,
+}) {
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(0)
   const [question, setQuestion] = useState('')
@@ -368,6 +371,23 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
   }
 
   useEffect(() => { loadAgents() /* eslint-disable-next-line */ }, [])
+
+  // 从「数字人管理」卡片跳转：选中并打开设置 / 招聘
+  useEffect(() => {
+    if (!focusAgentId) return
+    setSelectedId(focusAgentId)
+    if (openSettings) setSettingsOpen(true)
+    onFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusAgentId, openSettings])
+
+  useEffect(() => {
+    if (!openHire) return
+    setNewPolicy(emptyPolicy())
+    setCreateOpen(true)
+    onHireConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openHire])
 
   useEffect(() => {
     fetch(`${API}/workspaces`)
@@ -825,6 +845,8 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         if (turn > 0) patch.taskTokens = turn
         if (Number(ev.used_tokens) > 0) patch.contextUsed = Number(ev.used_tokens)
         if (Number(ev.window_tokens) > 0) patch.contextWindow = Number(ev.window_tokens)
+        // SSE usage 来自本轮 turn，恒为估算（缺省 true 兼容旧后端）
+        patch.contextEstimated = ev.estimated !== false
         if (Object.keys(patch).length) patchAgentSession(agentId, patch)
       } else if (ev.type === 'task_progress') {
         // 触发 tasks 刷新由轮询承接
@@ -834,6 +856,11 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
           { role: 'system', content: ev.content || '系统提示', time: Date.now() },
         ])
       } else if (ev.type === 'context_compacted') {
+        // compact 后重置圆环估算，避免沿用旧 session 占用
+        patchAgentSession(agentId, {
+          contextUsed: Number(ev.used_tokens) || 0,
+          contextEstimated: true,
+        })
         // 运行中不拆毁流式气泡（Codex 常在回合末尾发 compact，否则回复会闪现后消失）
         if (getAgentSession(agentId).loading) {
           setAgentChatLog(agentId, (prev) => [
@@ -925,9 +952,16 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
       if (res.status === 401) { onUnauthorized?.(); return }
       if (!res.ok) return
       const d = await res.json()
+      const src = d.source || ''
+      let estimated = !!d.estimated
+      // 兼容旧后端无 estimated：仅 Claude probe 视为精确
+      if (d.estimated === undefined || d.estimated === null) {
+        estimated = src !== 'probe'
+      }
       patchAgentSession(agentId, {
         contextUsed: Number(d.used_tokens) || 0,
         contextWindow: Number(d.window_tokens) || 0,
+        contextEstimated: estimated,
       })
     } catch { /* ignore */ }
   }
@@ -1001,7 +1035,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         loading: false, abort: null, runStartedAt: 0, pendingInterrupt: '', interrupting: false,
         liveActivity: null,
       })
-      await refreshAgentContext(agentId, true)
+      await refreshAgentContext(agentId, false)
       if (pending) await sendQuestion(agentId, pending)
     }
   }
@@ -1226,7 +1260,7 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
         <ListCollapseIcon collapsed={listCollapsed} />
       </button>
       <div className="ma-toolbar">
-        <h2>数字员工管理</h2>
+        <h2>数字人对话</h2>
         <div className="ma-toolbar-actions">
           <button
             type="button"
@@ -1561,7 +1595,11 @@ export default function ManagedAgentsPanel({ authHeaders, onUnauthorized, active
                     placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Enter 发送；@ 可协作其他同事' : '输入任务，Enter 发送；输入 @ 选择其他同事')}
                     disabled={initializing}
                   />
-                  <ContextRing used={sess.contextUsed || 0} window={sess.contextWindow || 0} />
+                  <ContextRing
+                    used={sess.contextUsed || 0}
+                    window={sess.contextWindow || 0}
+                    estimated={sess.contextEstimated !== false}
+                  />
                 </div>
                 <div className="ma-composer-actions">
                   {!loading ? (
@@ -1995,9 +2033,10 @@ function PermCard({ p, more, busy, onDecide }) {
       {more > 0 && <div className="perm-more">+{more} 条排队中</div>}
       <div className="perm-actions">
         <button type="button" className="deny" onClick={() => onDecide(p.request_id, 'deny')}>拒绝</button>
-        <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow')} disabled={busy}>仅本次同意</button>
+        <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow')} disabled={busy}>本次允许</button>
+        <button type="button" className="allow" onClick={() => onDecide(p.request_id, 'allow_session')} disabled={busy}>本次会话允许</button>
       </div>
-      <div className="perm-hint">授权仅对本次调用生效,超时将自动拒绝。绿/黄/红表示风险：无害 / 需注意 / 高风险。</div>
+      <div className="perm-hint">Hard Deny 不可绕过。会话允许仅匹配规范化命令签名。超时自动拒绝。</div>
     </div>
   )
 }
@@ -2091,19 +2130,24 @@ function RunStatus({ interrupting, activity, runSec, taskTokens }) {
   )
 }
 
-/** 输入框右下角真实上下文占比圆环 */
-function ContextRing({ used, window: win }) {
+/** 输入框右下角上下文占比圆环；estimated 时显示「约 xx%」 */
+function ContextRing({ used, window: win, estimated = true }) {
   const size = 36
   const stroke = 3.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const pct = win > 0 ? Math.min(1, used / win) : 0
   const dash = c * pct
+  const pctNum = Math.round(pct * 100)
+  // 圆环内空间紧：估算用「约63%」；完整说明放 title
+  const pctLabel = estimated ? `约${pctNum}%` : `${pctNum}%`
   const title = win > 0
-    ? `上下文 ${fmtToken(used)} / ${fmtToken(win)}（${Math.round(pct * 100)}%）`
+    ? (estimated
+      ? `上下文约 ${fmtToken(used)} / ${fmtToken(win)}（约 ${pctNum}%，按最近一轮 usage 估算）`
+      : `上下文 ${fmtToken(used)} / ${fmtToken(win)}（${pctNum}%）`)
     : '上下文用量未知'
   return (
-    <div className="ma-ctx-ring" title={title} aria-label={title}>
+    <div className={`ma-ctx-ring${estimated ? ' is-estimated' : ''}`} title={title} aria-label={title}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#334155" strokeWidth={stroke} />
         <circle
@@ -2118,7 +2162,7 @@ function ContextRing({ used, window: win }) {
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
-      <span className="ma-ctx-ring-label">{win > 0 ? `${Math.round(pct * 100)}%` : '—'}</span>
+      <span className="ma-ctx-ring-label">{win > 0 ? pctLabel : '—'}</span>
     </div>
   )
 }

@@ -48,6 +48,7 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 	var body struct {
 		Name            string `json:"name"`
 		Engine          string `json:"engine"`
+		ContextWindowTokens *int64 `json:"context_window_tokens"`
 		BinPath         string `json:"bin_path"`
 		RulesPrompt     string `json:"rules_prompt"`
 		AllowWrite      *bool  `json:"allow_write"`
@@ -72,12 +73,15 @@ func (h *Handler) AdminAgentsCreate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "engine must be claude|codex|agent"})
 		return
 	}
+	if body.ContextWindowTokens != nil && !store.ValidContextWindow(*body.ContextWindowTokens) {
+		c.JSON(http.StatusBadRequest, gin.H{"error":"invalid context_window_tokens"}); return
+	}
 	ws := strings.TrimSpace(body.WorkspacePath)
 	se := body.ScheduleEnabled
 	cron := strings.TrimSpace(body.ScheduleCron)
 	label := strings.TrimSpace(body.ScheduleLabel)
 	in := store.ManagedAgentInput{
-		Name: name, Engine: engine, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
+		Name: name, Engine: engine, ContextWindowTokens: body.ContextWindowTokens, BinPath: strings.TrimSpace(body.BinPath), RulesPrompt: body.RulesPrompt,
 		AllowWrite: body.AllowWrite, AllowNetwork: body.AllowNetwork, AllowRm: body.AllowRm, AllowBrowser: body.AllowBrowser,
 		WorkspacePath: &ws, ScheduleEnabled: &se, ScheduleCron: &cron, ScheduleLabel: &label,
 	}
@@ -220,6 +224,13 @@ func (h *Handler) AdminAgentsUpdate(c *gin.Context) {
 		return
 	}
 	in := store.ManagedAgentInput{}
+	if v, ok := body["context_window_tokens"]; ok {
+		var window int64
+		if json.Unmarshal(v, &window) != nil || !store.ValidContextWindow(window) {
+			c.JSON(http.StatusBadRequest, gin.H{"error":"invalid context_window_tokens"}); return
+		}
+		in.ContextWindowTokens = &window
+	}
 	if v, ok := body["name"]; ok {
 		var s string
 		_ = json.Unmarshal(v, &s)

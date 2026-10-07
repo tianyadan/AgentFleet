@@ -97,7 +97,7 @@ func Load() Config {
 		JevosURL:        getenv("AVATAR_JEVOS_URL", "http://127.0.0.1:8017"),
 		JevosTimeoutSec: atoi(getenv("AVATAR_JEVOS_TIMEOUT_SEC", "20")),
 
-		ContextWindowClaude: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "200000"))),
+		ContextWindowClaude: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "1000000"))),
 		ContextWindowCodex:  int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CODEX", "200000"))),
 		ContextWindowCursor: int64(atoi(getenv("AVATAR_CONTEXT_WINDOW_CURSOR", "200000"))),
 	}
@@ -119,7 +119,7 @@ func (c Config) ContextWindowForEngine(engine string) int64 {
 			return c.ContextWindowClaude
 		}
 	}
-	return 200000
+	return 1000000
 }
 
 // OSSConfigured 头像上传所需 OSS 是否齐全。

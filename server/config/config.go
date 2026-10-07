@@ -110,10 +110,12 @@ func (c Config) ContextWindowForEngine(engine string) int64 {
 		if c.ContextWindowCodex > 0 {
 			return c.ContextWindowCodex
 		}
+		return 200000
 	case "agent", "cursor":
 		if c.ContextWindowCursor > 0 {
 			return c.ContextWindowCursor
 		}
+		return 200000
 	default:
 		if c.ContextWindowClaude > 0 {
 			return c.ContextWindowClaude

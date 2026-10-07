@@ -17,8 +17,11 @@ func TestContextWindowForEngine(t *testing.T) {
 	if c.ContextWindowForEngine("claude") != 100000 {
 		t.Fatalf("claude")
 	}
-	if (Config{}).ContextWindowForEngine("codex") != 1000000 {
-		t.Fatalf("empty fallback")
+	if (Config{}).ContextWindowForEngine("codex") != 200000 {
+		t.Fatalf("codex empty fallback")
+	}
+	if (Config{}).ContextWindowForEngine("claude") != 1000000 {
+		t.Fatalf("claude empty fallback")
 	}
 }
 

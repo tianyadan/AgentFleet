@@ -87,7 +87,8 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 	persistSession := !noHook && metaConv > 0
 	onMeta := func(m agent.RunMeta) {
 		// 规范化为本轮估算（不累计）；窗口缺省时用统一配置
-		m = agent.NormalizeRunMetaContext(a.Engine, m, s.Cfg.ContextWindowForEngine(a.Engine))
+		m = agent.NormalizeRunMetaContext(a.Engine, m, a.ContextWindowTokens)
+		m.ContextWindow = a.ContextWindowTokens
 		if persistSession {
 			s.RememberEngineMeta(context.WithoutCancel(ctx), a.ID, metaConv, m)
 		}

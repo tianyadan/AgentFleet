@@ -256,6 +256,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.ensureReceptionistSchema(ctx); err != nil {
 		return err
 	}
+	// 13) v0.3.5 每位数字员工独立设置上下文窗口
+	var contextColCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_agents' AND COLUMN_NAME = 'context_window_tokens'`).Scan(&contextColCount); err != nil { return err }
+	if contextColCount == 0 {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE managed_agents ADD COLUMN context_window_tokens BIGINT NOT NULL DEFAULT 1000000 AFTER engine`); err != nil { return err }
+	}
 	return nil
 }
 

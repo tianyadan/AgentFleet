@@ -17,8 +17,19 @@ func TestContextWindowForEngine(t *testing.T) {
 	if c.ContextWindowForEngine("claude") != 100000 {
 		t.Fatalf("claude")
 	}
-	if (Config{}).ContextWindowForEngine("codex") != 200000 {
+	if (Config{}).ContextWindowForEngine("codex") != 1000000 {
 		t.Fatalf("empty fallback")
+	}
+}
+
+func TestClaudeDefaultContextWindow(t *testing.T) {
+	t.Setenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "")
+	if got := Load().ContextWindowForEngine("claude"); got != 1000000 {
+		t.Fatalf("Claude default window = %d, want 1000000", got)
+	}
+	t.Setenv("AVATAR_CONTEXT_WINDOW_CLAUDE", "200000")
+	if got := Load().ContextWindowForEngine("claude"); got != 200000 {
+		t.Fatalf("Claude env override = %d, want 200000", got)
 	}
 }
 

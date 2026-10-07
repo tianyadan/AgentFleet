@@ -50,11 +50,13 @@ func (s *Service) FetchEngineContext(ctx context.Context, agentID int64, fresh b
 	meta, _ := s.Store.GetConversationEngineMeta(ctx, a.ConversationID)
 	out.SessionID = meta.SessionID
 	out.UsedTokens = meta.UsedTokens
-	out.WindowTokens = meta.WindowTokens
+	out.WindowTokens = a.ContextWindowTokens
 
 	if !fresh {
 		ctxCacheMu.Lock()
 		if c, ok := ctxCache[agentID]; ok && time.Now().Unix()-c.UpdatedAt < 4 && c.WindowTokens > 0 {
+			c.WindowTokens = a.ContextWindowTokens
+			c.UsedPercent = agent.PercentOf(c.UsedTokens, c.WindowTokens)
 			if c.Source != "probe" {
 				c.Estimated = agent.InferEstimated(a.Engine, c.Source)
 			}
@@ -72,7 +74,7 @@ func (s *Service) FetchEngineContext(ctx context.Context, agentID int64, fresh b
 	if ws := strings.TrimSpace(a.WorkspacePath); ws != "" {
 		dir = ws
 	}
-	fallbackWin := s.Cfg.ContextWindowForEngine(a.Engine)
+	fallbackWin := a.ContextWindowTokens
 	busy := contextProbeBlocked(a.Status, s.agentRunActive(agentID))
 	allowProbe := fresh && !busy && strings.EqualFold(a.Engine, "claude")
 
@@ -124,6 +126,8 @@ func (s *Service) FetchEngineContext(ctx context.Context, agentID int64, fresh b
 		_ = s.Store.UpdateConversationEngineMeta(ctx, a.ConversationID, meta.SessionID, snap.UsedTokens, snap.WindowTokens)
 	}
 
+	out.WindowTokens = a.ContextWindowTokens
+	out.UsedPercent = agent.PercentOf(out.UsedTokens, out.WindowTokens)
 	ctxCacheMu.Lock()
 	ctxCache[agentID] = out
 	ctxCacheMu.Unlock()

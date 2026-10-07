@@ -14,7 +14,8 @@ type ManagedAgent struct {
 	Name            string     `json:"name"`
 	AvatarURL       string     `json:"avatar_url"`
 	FolderID        int64      `json:"folder_id"` // 0=根目录
-	Engine          string     `json:"engine"`    // claude | codex | agent
+	Engine          string     `json:"engine"`
+	ContextWindowTokens int64 `json:"context_window_tokens"`    // claude | codex | agent
 	BinPath         string     `json:"bin_path"`
 	RulesPrompt     string     `json:"rules_prompt"`
 	AutoReview      bool       `json:"auto_review"`
@@ -43,6 +44,7 @@ type ManagedAgent struct {
 type ManagedAgentInput struct {
 	Name            string
 	Engine          string
+	ContextWindowTokens *int64
 	BinPath         string
 	RulesPrompt     string
 	AllowWrite      *bool
@@ -53,6 +55,14 @@ type ManagedAgentInput struct {
 	ScheduleEnabled *bool
 	ScheduleCron    *string
 	ScheduleLabel   *string
+}
+
+// ValidContextWindow 只接受后台提供的三档窗口（Token 数）。
+func ValidContextWindow(v int64) bool { return v == 262144 || v == 524288 || v == 1000000 }
+
+func DefaultContextWindow(engine string) int64 {
+	if strings.EqualFold(engine, "claude") { return 1000000 }
+	return 262144
 }
 
 // ValidEngine 校验引擎类型。
@@ -94,7 +104,7 @@ func scanManagedAgent(scanner interface {
 	var runAt sql.NullTime
 	var auto, tp, aw, an, ar, ab, se, recv int
 	err := scanner.Scan(
-		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.BinPath, &a.RulesPrompt, &auto, &tp,
+		&a.ID, &a.Name, &a.AvatarURL, &a.FolderID, &a.Engine, &a.ContextWindowTokens, &a.BinPath, &a.RulesPrompt, &auto, &tp,
 		&aw, &an, &ar, &ab, &a.WorkspacePath, &se, &a.ScheduleCron, &a.ScheduleLabel,
 		&a.Status, &recv, &a.ConversationID, &a.ClonedFromID, &a.LastError, &a.LastRunMs, &runAt, &a.CreatedAt, &a.UpdatedAt,
 	)
@@ -116,7 +126,7 @@ func scanManagedAgent(scanner interface {
 	return a, nil
 }
 
-const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(folder_id,0), engine, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
+const managedSelectCols = `id, name, IFNULL(avatar_url,''), IFNULL(folder_id,0), engine, context_window_tokens, bin_path, IFNULL(rules_prompt,''), IFNULL(auto_review,0),
 		IFNULL(task_plan_enabled,1),
 		IFNULL(allow_write,1), IFNULL(allow_network,1), IFNULL(allow_rm,0), IFNULL(allow_browser,0), IFNULL(workspace_path,''),
 		IFNULL(schedule_enabled,0), IFNULL(schedule_cron,''), IFNULL(schedule_label,''),
@@ -209,12 +219,14 @@ func (s *Store) CreateManagedAgent(ctx context.Context, in ManagedAgentInput) (i
 	if in.ScheduleLabel != nil {
 		label = strings.TrimSpace(*in.ScheduleLabel)
 	}
+	window := DefaultContextWindow(engine)
+	if in.ContextWindowTokens != nil { window = *in.ContextWindowTokens }
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
-		 (name, engine, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
+		 (name, engine, context_window_tokens, bin_path, rules_prompt, status, allow_write, allow_network, allow_rm, allow_browser,
 		  workspace_path, schedule_enabled, schedule_cron, schedule_label)
-		 VALUES (?,?,?,?, 'idle',?,?,?,?,?,?,?,?)`,
-		in.Name, engine, binPath, in.RulesPrompt,
+		 VALUES (?,?,?,?,?, 'idle',?,?,?,?,?,?,?,?)`,
+		in.Name, engine, window, binPath, in.RulesPrompt,
 		bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label)
 	if err != nil {
 		return 0, err
@@ -243,11 +255,11 @@ func (s *Store) InsertClonedManagedAgent(ctx context.Context, a ManagedAgent) (i
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO managed_agents
-		 (name, avatar_url, folder_id, engine, bin_path, rules_prompt, auto_review, task_plan_enabled,
+		 (name, avatar_url, folder_id, engine, context_window_tokens, bin_path, rules_prompt, auto_review, task_plan_enabled,
 		  allow_write, allow_network, allow_rm, allow_browser, workspace_path,
 		  schedule_enabled, schedule_cron, schedule_label, status, conversation_id, cloned_from_id)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.Name, nullIfEmpty(a.AvatarURL), folder, engine, binPath, a.RulesPrompt,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.Name, nullIfEmpty(a.AvatarURL), folder, engine, a.ContextWindowTokens, binPath, a.RulesPrompt,
 		bool01(a.AutoReview), bool01(a.TaskPlanEnabled),
 		bool01(a.AllowWrite), bool01(a.AllowNetwork), bool01(a.AllowRm), bool01(a.AllowBrowser),
 		a.WorkspacePath, 0, "", "", st, nil, cloned)
@@ -277,6 +289,8 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	n, b, r := a.Name, a.BinPath, a.RulesPrompt
 	aw, an, ar, ab := a.AllowWrite, a.AllowNetwork, a.AllowRm, a.AllowBrowser
 	ws, se, cron, label := a.WorkspacePath, a.ScheduleEnabled, a.ScheduleCron, a.ScheduleLabel
+	window := a.ContextWindowTokens
+	if in.ContextWindowTokens != nil { window = *in.ContextWindowTokens }
 
 	if strings.TrimSpace(in.Name) != "" {
 		n = strings.TrimSpace(in.Name)
@@ -316,10 +330,10 @@ func (s *Store) UpdateManagedAgent(ctx context.Context, id int64, in ManagedAgen
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		`UPDATE managed_agents SET name=?, bin_path=?, rules_prompt=?,
+		`UPDATE managed_agents SET name=?, context_window_tokens=?, bin_path=?, rules_prompt=?,
 		 allow_write=?, allow_network=?, allow_rm=?, allow_browser=?, workspace_path=?,
 		 schedule_enabled=?, schedule_cron=?, schedule_label=? WHERE id=?`,
-		n, b, r, bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label, id)
+		n, window, b, r, bool01(aw), bool01(an), bool01(ar), bool01(ab), ws, bool01(se), cron, label, id)
 	return err
 }
 

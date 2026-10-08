@@ -66,6 +66,8 @@ func (h *Handler) Register(r *gin.Engine) {
 		{
 			adm.GET("/conversations", h.Conversations)
 			adm.GET("/conversations/:id/messages", h.ConversationMessages)
+			adm.GET("/admin/visitor-ask-logs", h.AdminVisitorAskLogs)
+			adm.GET("/admin/visitor-ask-logs/:id", h.AdminVisitorAskLogDetail)
 			adm.GET("/commands", h.Commands)
 			adm.GET("/stats", h.Stats)
 			adm.GET("/stats/days", h.StatsDays)

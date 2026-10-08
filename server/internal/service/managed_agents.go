@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"colleague-avatar/server/internal/store"
 )
@@ -60,6 +62,21 @@ type askCoreOpts struct {
 	silent       bool
 	holdStatus   bool
 	skipTaskPlan bool
+	// visitorAudit 非空时：用户消息落库后建 processing 审计，结束后写 token/耗时/状态。
+	visitorAudit *visitorAskAudit
+}
+
+// visitorAskAudit 前台一轮 Ask 的审计上下文。
+type visitorAskAudit struct {
+	VisitorID int64
+	IP        string
+	UA        string
+	logID     int64
+	started   time.Time
+	input     int64
+	output    int64
+	cacheRead int64
+	cacheWrite int64
 }
 
 func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question string, holdStatus bool) (*store.Message, error) {
@@ -83,6 +100,23 @@ func (s *Service) silentAsk(ctx context.Context, a *store.ManagedAgent, question
 }
 
 func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fixedConvID int64, question string, opts askCoreOpts, onEvent AskEventSink) (*store.Message, error) {
+	// 先包装 onEvent，再定义 onChunk，确保 usage 能写入审计。
+	if opts.visitorAudit != nil {
+		inner := onEvent
+		onEvent = func(ev map[string]any) {
+			if ev != nil {
+				if t, _ := ev["type"].(string); t == "usage" {
+					opts.visitorAudit.input = toInt64Any(ev["input_tokens"])
+					opts.visitorAudit.output = toInt64Any(ev["output_tokens"])
+					opts.visitorAudit.cacheRead = toInt64Any(ev["cache_read_tokens"])
+					opts.visitorAudit.cacheWrite = toInt64Any(ev["cache_write_tokens"])
+				}
+			}
+			if inner != nil {
+				inner(ev)
+			}
+		}
+	}
 	onChunk := func(chunk string) {
 		emitAsk(onEvent, map[string]any{"type": "chunk", "content": chunk})
 	}
@@ -162,9 +196,23 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 
 	if !opts.silent {
 		// 先落库用户消息，再规划/执行，避免规划耗时或中途压缩清库导致对话框「发出去看不见」
-		_, _ = s.Store.InsertMessage(runCtx, &store.Message{
+		userMsg := &store.Message{
 			ConversationID: convID, Role: "user", Content: userQuestion, Status: "ok",
-		})
+		}
+		userMsgID, uerr := s.Store.InsertMessage(runCtx, userMsg)
+		if opts.visitorAudit != nil {
+			opts.visitorAudit.started = time.Now()
+			if uerr != nil {
+				log.Printf("visitor ask: insert user message failed: %v", uerr)
+			} else {
+				logID, aerr := s.Store.BeginVisitorAskLog(runCtx, opts.visitorAudit.VisitorID, convID, agentID, userMsgID, opts.visitorAudit.IP, opts.visitorAudit.UA)
+				if aerr != nil {
+					log.Printf("visitor ask: begin audit failed: %v", aerr)
+				} else {
+					opts.visitorAudit.logID = logID
+				}
+			}
+		}
 	}
 
 	var steps []string
@@ -181,7 +229,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	}
 
 	if len(mentions) > 0 {
-		return s.askManagedWithInvokes(runCtx, a, convID, opts.bindMainConv, userQuestion, taskBody, mentions, steps, tp, onEvent, onChunk)
+		return s.askManagedWithInvokes(runCtx, a, convID, opts, userQuestion, taskBody, mentions, steps, tp, onEvent, onChunk)
 	}
 
 	sys := BuildAgentSystemPrompt(a)
@@ -200,6 +248,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, sys, q, "", onChunk, onEvent, userQuestion)
 	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
+	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
 	return msg, err
 }
 
@@ -214,7 +263,7 @@ func (s *Service) askManagedWithInvokes(
 	ctx context.Context,
 	caller *store.ManagedAgent,
 	convID int64,
-	bindMainConv bool,
+	opts askCoreOpts,
 	rawQuestion, taskBody string,
 	mentions []Mention,
 	steps []string,
@@ -222,6 +271,7 @@ func (s *Service) askManagedWithInvokes(
 	onEvent AskEventSink,
 	onChunk func(string),
 ) (*store.Message, error) {
+	bindMainConv := opts.bindMainConv
 	// 步骤 0 已是理解需求；从 1 开始委托
 	results := s.invokeAllParallel(ctx, caller, mentions, taskBody, onEvent)
 	for i, r := range results {
@@ -260,8 +310,9 @@ func (s *Service) askManagedWithInvokes(
 	sumQ = MaybeReinforcePolicy(caller, userTurns, sumQ)
 
 	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, sys, sumQ, "", onChunk, onEvent, taskBody)
-	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, askCoreOpts{bindMainConv: bindMainConv})
+	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
+	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)
 	s.writeInvokeDividersAsync(caller, taskBody, results)
 	return msg, err
 }
@@ -303,12 +354,63 @@ func (s *Service) finishManagedAsk(ctx context.Context, agentID, convID int64, b
 		ConversationID: convID, Role: "assistant", Content: out, Status: status, ReplyMs: ms,
 	}
 	if !opts.silent {
-		_, _ = s.Store.InsertMessage(context.WithoutCancel(ctx), msg)
+		if _, err := s.Store.InsertMessage(context.WithoutCancel(ctx), msg); err != nil {
+			log.Printf("finishManagedAsk: insert assistant failed: %v", err)
+		}
 	}
 	if !opts.holdStatus {
 		_ = s.Store.SetManagedAgentStatus(context.WithoutCancel(ctx), agentID, agentStatus, lastErr, ms, statusConvID(bindMainConv, convID))
 	}
 	return msg, nil
+}
+
+// finalizeVisitorAskAudit 写完 assistant 后结束审计；失败只打日志，不拖垮主链路。
+func (s *Service) finalizeVisitorAskAudit(ctx context.Context, audit *visitorAskAudit, msg *store.Message, runErr error) {
+	if audit == nil || audit.logID <= 0 {
+		return
+	}
+	status := store.AskStatusSuccess
+	errMsg := ""
+	if ctx.Err() != nil {
+		status = store.AskStatusCancelled
+		errMsg = ctx.Err().Error()
+	} else if runErr != nil {
+		status = store.AskStatusError
+		errMsg = runErr.Error()
+	}
+	asstID := int64(0)
+	duration := int(time.Since(audit.started).Milliseconds())
+	if msg != nil {
+		asstID = msg.ID
+		if msg.Status == "error" && status == store.AskStatusSuccess {
+			status = store.AskStatusError
+		}
+	}
+	if duration <= 0 {
+		duration = 1
+	}
+	cached := audit.cacheRead + audit.cacheWrite
+	total := audit.input + audit.output + cached
+	if err := s.Store.FinishVisitorAskLog(context.WithoutCancel(ctx), audit.logID, asstID,
+		audit.input, audit.output, cached, total, duration, status, errMsg); err != nil {
+		log.Printf("visitor ask: finish audit %d failed: %v", audit.logID, err)
+	}
+}
+
+func toInt64Any(v any) int64 {
+	switch t := v.(type) {
+	case int64:
+		return t
+	case int:
+		return int64(t)
+	case float64:
+		return int64(t)
+	case json.Number:
+		i, _ := t.Int64()
+		return i
+	default:
+		return 0
+	}
 }
 
 // applyCancelledAskOutput 请求被取消时保留已生成正文，避免刷新页面把回复覆盖成只有「已终止」。

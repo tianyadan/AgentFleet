@@ -1,6 +1,15 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.3.6',
+    date: '2026-10-08',
+    items: [
+      '前台 Ask 审计 V1：visitor_ask_logs 关联 user/assistant message_id，记录本轮 Token/耗时/状态',
+      '后台「历史」重构为「对话审计」：列表筛选 + 详情 Drawer，问题经 messages 联查不重复存正文',
+      'Ask 失败/取消会结束审计，避免永久 processing；审计写库失败不阻断主对话',
+    ],
+  },
+  {
     version: 'v0.3.4',
     date: '2026-10-05',
     items: [

@@ -111,9 +111,12 @@ func (s *Service) AskReceptionist(ctx context.Context, visitorID, agentID, convI
 	}
 	defer s.ReleaseOccupancy(context.WithoutCancel(ctx), agentID)
 
-	_ = s.Store.InsertVisitorAskLog(ctx, visitorID, convID, agentID, ip, ua)
 	_ = s.Store.TouchVisitor(ctx, visitorID)
-	return s.AskManagedIsolated(ctx, agentID, convID, question, onEvent)
+	// 审计在 askManagedCore：用户消息 INSERT 后 Begin，assistant 落库后 Finish。
+	return s.askManagedCore(ctx, a, convID, question, askCoreOpts{
+		bindMainConv: false,
+		visitorAudit: &visitorAskAudit{VisitorID: visitorID, IP: ip, UA: ua},
+	}, onEvent)
 }
 
 // EnrichAgentsFolderNames 为列表补充分组名。

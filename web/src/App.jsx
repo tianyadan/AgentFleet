@@ -10,6 +10,7 @@ import { AdminMenuIcon } from './adminMenuIcons.jsx'
 import ProductManual from './ProductManual.jsx'
 import PublicHome from './PublicHome.jsx'
 import DigitalHumanCards from './DigitalHumanCards.jsx'
+import VisitorAskAudit from './VisitorAskAudit.jsx'
 
 const API = '/api'
 const AUTH_TOKEN_KEY = 'avatar_admin_token'
@@ -17,7 +18,7 @@ const CHANGELOG_PAGE_SIZE = 5
 marked.setOptions({ breaks: true, gfm: true })
 
 const ADMIN_MENUS = [
-  { id: 'history', label: '历史' },
+  { id: 'audit', label: '对话审计' },
   { id: 'stats', label: '统计' },
   {
     id: 'digital',
@@ -693,7 +694,6 @@ export default function App() {
   function switchAdminMenu(id) {
     setAdminMenu(id)
     if (id === 'agents' || id === 'agents-manage') setDigitalOpen(true)
-    if (id === 'history') loadSessions(1)
     if (id === 'stats') loadStats()
     if (id === 'changelog') setClPage(1)
   }
@@ -756,7 +756,6 @@ export default function App() {
 
   // 进入管理台历史菜单时加载列表
   useEffect(() => {
-    if (view === 'admin' && adminMenu === 'history' && authToken) loadSessions(1)
     if (view === 'admin' && adminMenu === 'stats' && authToken) loadStats()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, adminMenu, authToken])
@@ -862,26 +861,12 @@ export default function App() {
             })}
           </aside>
           <main className="admin-main">
-            {adminMenu === 'history' && (
-              <section className="list">
-                <p className="empty-hint">对话历史 · 每页 {histPageSize} 条 · 共 {histTotal} 条</p>
-                {sessions.length === 0 && <p className="empty">暂无对话记录</p>}
-                {sessions.map((s) => (
-                  <button key={s.id} type="button" className="card session" onClick={() => openConversationFromHistory(s.id)}>
-                    <div className="card-head">
-                      <span className="tag">{s.mode === 'chat' ? '长对话' : '单次'}</span>
-                      <span className="tag ip-tag">{s.user_ip}</span>
-                      <span>{new Date(s.updated_at).toLocaleString()}</span>
-                    </div>
-                    <p className="q">{s.preview || '(空对话)'}</p>
-                  </button>
-                ))}
-                <div className="pager">
-                  <button type="button" disabled={histPage <= 1} onClick={() => loadSessions(histPage - 1)}>上一页</button>
-                  <span>第 {histPage} / {Math.max(1, Math.ceil(histTotal / histPageSize) || 1)} 页</span>
-                  <button type="button" disabled={histPage * histPageSize >= histTotal} onClick={() => loadSessions(histPage + 1)}>下一页</button>
-                </div>
-              </section>
+            {adminMenu === 'audit' && (
+              <VisitorAskAudit
+                authHeaders={authHeaders}
+                onUnauthorized={() => clearAuth('登录已过期')}
+                active={adminMenu === 'audit'}
+              />
             )}
             {adminMenu === 'stats' && (
               <section className="list">
@@ -983,7 +968,7 @@ export default function App() {
                 </section>
               )
             })()}
-            {!['history', 'stats', 'agents', 'agents-manage', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
+            {!['audit', 'stats', 'agents', 'agents-manage', 'plans', 'manual', 'changelog'].includes(adminMenu) && (
               <section className="admin-placeholder">
                 <h2>{menuLabel(adminMenu)}</h2>
                 <p>即将开放</p>

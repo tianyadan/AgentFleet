@@ -55,20 +55,30 @@ func (s *Store) ensureReceptionistSchema(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS visitor_ask_logs (
-		  id               BIGINT        NOT NULL AUTO_INCREMENT,
-		  visitor_id       BIGINT        NOT NULL,
-		  conversation_id  BIGINT        NOT NULL DEFAULT 0,
-		  agent_id         BIGINT        NOT NULL DEFAULT 0,
-		  ip               VARCHAR(64)   NOT NULL DEFAULT '',
-		  user_agent       VARCHAR(512)  NOT NULL DEFAULT '',
-		  created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		  id                   BIGINT        NOT NULL AUTO_INCREMENT,
+		  visitor_id           BIGINT        NOT NULL,
+		  conversation_id      BIGINT        NOT NULL DEFAULT 0,
+		  agent_id             BIGINT        NOT NULL DEFAULT 0,
+		  ip                   VARCHAR(64)   NOT NULL DEFAULT '',
+		  user_agent           VARCHAR(512)  NOT NULL DEFAULT '',
+		  user_message_id      BIGINT        NOT NULL DEFAULT 0,
+		  assistant_message_id BIGINT        NOT NULL DEFAULT 0,
+		  input_tokens         BIGINT        NOT NULL DEFAULT 0,
+		  output_tokens        BIGINT        NOT NULL DEFAULT 0,
+		  cached_tokens        BIGINT        NOT NULL DEFAULT 0,
+		  total_tokens         BIGINT        NOT NULL DEFAULT 0,
+		  duration_ms          INT           NOT NULL DEFAULT 0,
+		  status               VARCHAR(20)   NOT NULL DEFAULT 'processing',
+		  error_message        TEXT          NULL,
+		  finished_at          DATETIME      NULL,
+		  created_at           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		  PRIMARY KEY (id),
 		  KEY idx_val_visitor (visitor_id, created_at),
 		  KEY idx_val_ip (ip, created_at)
 		) ENGINE=InnoDB`); err != nil {
 		return err
 	}
-	return nil
+	return s.ensureVisitorAskLogAuditColumns(ctx)
 }
 
 // NewVisitorPublicID 生成访客公开 id。
@@ -192,17 +202,6 @@ func (s *Store) ConversationHasVisitor(ctx context.Context, convID int64) (bool,
 		return false, nil
 	}
 	return vid.Valid && vid.Int64 > 0, nil
-}
-
-// InsertVisitorAskLog 记录一次前台提问的 IP/设备。
-func (s *Store) InsertVisitorAskLog(ctx context.Context, visitorID, convID, agentID int64, ip, ua string) error {
-	if len(ua) > 512 {
-		ua = ua[:512]
-	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO visitor_ask_logs (visitor_id, conversation_id, agent_id, ip, user_agent) VALUES (?,?,?,?,?)`,
-		visitorID, convID, agentID, ip, ua)
-	return err
 }
 
 // GetReceptionist 返回当前前台助理（最多一个）。

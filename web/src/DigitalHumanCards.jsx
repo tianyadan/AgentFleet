@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { agentAvatarUrl } from './agentAvatar.js'
 
 const API = '/api'
+const PAGE_SIZE = 12 // 一页 12 张：4 列 × 3 行
 
-/** 设置图标 */
+/** 设置图标（齿轮，避免射线状「太阳」观感） */
 function GearIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="3" />
-      <path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   )
 }
@@ -15,7 +17,7 @@ function GearIcon() {
 /** 删除图标 */
 function TrashIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M3 6h18" />
       <path d="M8 6V4h8v2" />
       <path d="M19 6l-1 14H6L5 6" />
@@ -25,7 +27,7 @@ function TrashIcon() {
 }
 
 /**
- * 数字人管理：卡片网格、前台助理、多选解聘。
+ * 数字人管理：卡片网格、前台助理、多选解聘、分页（12/页）。
  * onOpenSettings(agent) / onHire 由父级打开现有招聘/设置流程。
  */
 export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenSettings, onHire, active }) {
@@ -34,6 +36,14 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
   const [selected, setSelected] = useState(() => new Set())
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [page, setPage] = useState(1)
+
+  const totalPages = Math.max(1, Math.ceil(agents.length / PAGE_SIZE))
+  const pageItems = useMemo(() => {
+    const p = Math.min(page, totalPages)
+    const start = (p - 1) * PAGE_SIZE
+    return agents.slice(start, start + PAGE_SIZE)
+  }, [agents, page, totalPages])
 
   async function load() {
     setLoading(true)
@@ -42,7 +52,12 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
       const res = await fetch(`${API}/admin/agents`, { headers: authHeaders() })
       if (res.status === 401) { onUnauthorized?.(); return }
       const d = await res.json()
-      setAgents(Array.isArray(d) ? d : (d.items || []))
+      const list = Array.isArray(d) ? d : (d.items || [])
+      setAgents(list)
+      setPage((p) => {
+        const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
+        return Math.min(p, pages)
+      })
     } catch (e) {
       setErr(String(e))
     } finally {
@@ -64,10 +79,19 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
     })
   }
 
+  // 全选当前页
   function toggleAll() {
-    if (selected.size === agents.length) setSelected(new Set())
-    else setSelected(new Set(agents.map((a) => a.id)))
+    const ids = pageItems.map((a) => a.id)
+    const allOn = ids.length > 0 && ids.every((id) => selected.has(id))
+    setSelected((prev) => {
+      const n = new Set(prev)
+      if (allOn) ids.forEach((id) => n.delete(id))
+      else ids.forEach((id) => n.add(id))
+      return n
+    })
   }
+
+  const pageAllSelected = pageItems.length > 0 && pageItems.every((a) => selected.has(a.id))
 
   async function deleteOne(a) {
     if (!window.confirm(`确认解聘「${a.name}」？`)) return
@@ -138,8 +162,8 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
         <h2>数字人管理</h2>
         <div className="dh-toolbar-actions">
           <label className="dh-check-all">
-            <input type="checkbox" checked={agents.length > 0 && selected.size === agents.length} onChange={toggleAll} disabled={!agents.length || busy} />
-            全选
+            <input type="checkbox" checked={pageAllSelected} onChange={toggleAll} disabled={!pageItems.length || busy} />
+            全选本页
           </label>
           <button type="button" className="ghost" disabled={!selected.size || busy} onClick={deleteSelected}>
             解聘所选{selected.size ? ` (${selected.size})` : ''}
@@ -152,16 +176,16 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
       {loading && !agents.length && <p className="empty">加载中…</p>}
       {!loading && agents.length === 0 && <p className="empty">暂无数字人，点击「一键招聘」创建</p>}
       <div className="dh-grid">
-        {agents.map((a) => (
+        {pageItems.map((a) => (
           <article key={a.id} className={`dh-card ${a.is_receptionist ? 'is-recv' : ''} ${selected.has(a.id) ? 'is-selected' : ''}`}>
             {a.is_receptionist && <span className="dh-badge">前台助理</span>}
             <label className="dh-select">
               <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} disabled={busy} />
             </label>
             <div className="dh-avatar">
-              {a.avatar_url ? <img src={a.avatar_url} alt="" /> : (a.name || '?').slice(0, 1)}
+              <img src={agentAvatarUrl(a)} alt="" />
             </div>
-            <h3 className="dh-name">{a.name}</h3>
+            <h3 className="dh-name" title={a.name}>{a.name}</h3>
             <p className="dh-folder">{a.folder_name || (a.folder_id ? `组 #${a.folder_id}` : '未入组')}</p>
             <p className="dh-engine">{a.engine}</p>
             <div className="dh-card-actions">
@@ -178,6 +202,13 @@ export default function DigitalHumanCards({ authHeaders, onUnauthorized, onOpenS
           </article>
         ))}
       </div>
+      {agents.length > PAGE_SIZE && (
+        <div className="dh-pager">
+          <button type="button" disabled={page <= 1 || busy} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</button>
+          <span>{Math.min(page, totalPages)} / {totalPages}（共 {agents.length}）</span>
+          <button type="button" disabled={page >= totalPages || busy} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>下一页</button>
+        </div>
+      )}
     </section>
   )
 }

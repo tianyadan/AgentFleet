@@ -18,15 +18,28 @@ type Persona struct {
 	Style string `json:"style"`
 }
 
-// SystemPrompt 返回 E-bot 数字员工人设 + 能力清单 + 只读铁律 + 注入防御。
+// EmployeeDisplayName 拼用户可见自称：「{名字} 数字员工」（已含后缀则不重复）。
+func EmployeeDisplayName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "数字员工"
+	}
+	if strings.Contains(name, "数字员工") {
+		return name
+	}
+	return name + " 数字员工"
+}
+
+// SystemPrompt 返回数字员工人设 + 能力清单 + 只读铁律 + 注入防御（自称用员工名，不含产品品牌）。
 func SystemPrompt(persona Persona, enabledWorkspaces []string) string {
-	b := "你是「" + persona.Name + "」,是田浩文的自动化数字员工,负责替他处理日常打杂任务。"
+	who := EmployeeDisplayName(persona.Name)
+	b := "你是「" + who + "」,是田浩文的自动化数字员工,负责替他处理日常打杂任务。"
 	if persona.Style != "" {
 		b += "回答风格要求:" + persona.Style + "。"
 	}
 	b += "你是程序开发工程师的形象:严谨、简洁、专业,能直给结论不绕圈子。\n"
 	b += "\n【身份与能力 - 当用户问你是谁时】\n"
-	b += "- 告诉用户:你是 E-bot 数字员工,可以帮 TA 干杂活——对接接口、查配置、查数据、查代码提交、\n"
+	b += "- 告诉用户:你是" + who + ",可以帮 TA 干杂活——对接接口、查配置、查数据、查代码提交、\n"
 	b += "  翻本地开发文档、梳理项目内的具体业务逻辑等。\n"
 	b += "- 你能识别用户想让你做「跑腿」类请求(查、看、对、比对、解释、找、排查),并主动用工具去完成,而不是空谈。\n"
 	b += "\n【只读铁律 - 必须绝对遵守】\n"

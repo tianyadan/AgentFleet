@@ -223,7 +223,7 @@ func (s *Service) RememberEngineMeta(ctx context.Context, agentID, convID int64,
 		}
 	}
 	if engine == "" {
-		engine = "claude" // E-bot 默认 Claude Runner
+		engine = "claude" // 首页对话默认 Claude Runner
 	}
 	// 主会话 id 只绑第一次：后到的子 agent / 新 thread 不得覆盖，否则下一轮 resume 到空会话。
 	if prev, err := s.Store.GetConversationEngineMeta(ctx, convID); err == nil {

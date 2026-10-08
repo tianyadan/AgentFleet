@@ -2151,39 +2151,34 @@ function RunStatus({ interrupting, activity, runSec, taskTokens }) {
   )
 }
 
-/** 输入框右下角上下文占比圆环；estimated 时显示「约 xx%」 */
+/** 输入框右下角上下文占比圆环；百分比仅悬停 title 展示 */
 function ContextRing({ used, window: win, estimated = true }) {
-  const size = 36
-  const stroke = 3.5
+  const size = 22
+  const stroke = 2.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
   const pct = win > 0 ? Math.min(1, used / win) : 0
   const dash = c * pct
   const pctNum = Math.round(pct * 100)
-  // 圆环内空间紧：估算用「约63%」；完整说明放 title
-  const pctLabel = estimated ? `约${pctNum}%` : `${pctNum}%`
   const title = win > 0
-    ? (estimated
-      ? `上下文约 ${fmtToken(used)} / ${fmtToken(win)}（约 ${pctNum}%，按最近一轮 usage 估算）`
-      : `上下文 ${fmtToken(used)} / ${fmtToken(win)}（${pctNum}%）`)
+    ? (estimated ? `约 ${pctNum}%` : `${pctNum}%`)
     : '上下文用量未知'
   return (
     <div className={`ma-ctx-ring${estimated ? ' is-estimated' : ''}`} title={title} aria-label={title}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#334155" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#333" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
           fill="none"
-          stroke="#22c55e"
+          stroke="#fff"
           strokeWidth={stroke}
           strokeDasharray={`${dash} ${c - dash}`}
           strokeLinecap="round"
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </svg>
-      <span className="ma-ctx-ring-label">{win > 0 ? pctLabel : '—'}</span>
     </div>
   )
 }

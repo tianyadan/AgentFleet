@@ -32,7 +32,7 @@ export default function VisitorAskAudit({ authHeaders, onUnauthorized, active })
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(20)
+  const [pageSize] = useState(10)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
   const [keyword, setKeyword] = useState('')
@@ -93,7 +93,7 @@ export default function VisitorAskAudit({ authHeaders, onUnauthorized, active })
     <section className="list audit-panel">
       <div className="audit-toolbar">
         <h2>对话审计</h2>
-        <p className="empty-hint">前台助理每一轮 Ask 一条记录 · 共 {total} 条</p>
+        <p className="empty-hint">前台助理每一轮 Ask 一条记录 · 每页 {pageSize} 条 · 共 {total} 条</p>
       </div>
 
       <div className="audit-filters">

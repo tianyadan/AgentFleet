@@ -41,7 +41,7 @@ func (h *Handler) Register(r *gin.Engine) {
 		api.POST("/auth/logout", h.Logout)
 		api.GET("/auth/me", auth.RequireAdminJWT(h.svc.Cfg.JWTSecret), h.Me)
 
-		// 公开:对话必需（旧 E-bot 接口保留兼容）
+		// 公开:对话必需（旧首页接口保留兼容）
 		api.POST("/question", h.Question)
 		api.POST("/conversations", h.CreateConversation)
 		api.POST("/conversations/:id/compress", h.ConversationCompress)
@@ -55,7 +55,7 @@ func (h *Handler) Register(r *gin.Engine) {
 		api.POST("/public/conversations/new", h.PublicNewConversation)
 		api.POST("/public/ask", h.PublicAsk)
 		api.GET("/public/context", h.PublicContext)
-		// 多 Agent 上报/查询保持公开(外部 agent 与 E-bot 经 curl 调用)
+		// 多 Agent 上报/查询保持公开(外部 agent 经 curl 调用)
 		api.POST("/agents/tasks", h.AgentTaskReport)
 		api.GET("/agents/tasks", h.AgentTaskList)
 		api.GET("/agents/task-types", h.AgentTaskTypes)
@@ -453,7 +453,7 @@ func (h *Handler) PermissionCompactSync(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "trigger": body.Trigger, "hook": body.HookEventName, "session_id": body.SessionID})
 }
 
-// ConversationCompress E-bot 长对话：引擎原生压缩 + 清库。
+// ConversationCompress 首页长对话：引擎原生压缩 + 清库。
 func (h *Handler) ConversationCompress(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
 	ok, err := h.svc.Store.ConversationExists(c.Request.Context(), id, h.clientIP(c))
@@ -465,7 +465,7 @@ func (h *Handler) ConversationCompress(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	// E-bot 使用配置的 Claude CLI
+	// 首页对话使用配置的 Claude CLI
 	bin := h.svc.Cfg.ClaudeBin
 	if err := h.svc.CompressConversation(c.Request.Context(), id, "claude", bin, h.svc.Cfg.WorkspaceRoot); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

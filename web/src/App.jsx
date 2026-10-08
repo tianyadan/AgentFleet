@@ -18,8 +18,6 @@ const CHANGELOG_PAGE_SIZE = 5
 marked.setOptions({ breaks: true, gfm: true })
 
 const ADMIN_MENUS = [
-  { id: 'audit', label: '对话审计' },
-  { id: 'stats', label: '统计' },
   {
     id: 'digital',
     label: '数字人',
@@ -28,6 +26,8 @@ const ADMIN_MENUS = [
       { id: 'agents-manage', label: '数字人管理' },
     ],
   },
+  { id: 'audit', label: '对话审计' },
+  { id: 'stats', label: '统计' },
   { id: 'plans', label: '项目协作' },
   { id: 'memos', label: '备忘录' },
   { id: 'passwords', label: '常用密码' },
@@ -737,7 +737,7 @@ export default function App() {
   }
 
   // v0.0.7 开场白(邀请语不足 200 字)
-  const OPENING = "👋 我是 **E-bot 数字员工**,田浩文的打杂分身,帮你 👉 对接接口 \u2022 查配置 \u2022 查数据 \u2022 查提交 \u2022 翻本地文档 \u2022 梳理业务逻辑。\n有啥代码/数据和「跑腿」的活儿,直接丢给我 💻🔌📦。当然,我只**查**,不改 😉。"
+  const OPENING = "👋 我是 **助手 数字员工**,田浩文的打杂分身,帮你 👉 对接接口 \u2022 查配置 \u2022 查数据 \u2022 查提交 \u2022 翻本地文档 \u2022 梳理业务逻辑。\n有啥代码/数据和「跑腿」的活儿,直接丢给我 💻🔌📦。当然,我只**查**,不改 😉。"
 
   // 任务总耗时计时(从提问发起到 done)
   const taskStartRef = useRef(0)
@@ -770,12 +770,13 @@ export default function App() {
       <div className="app app-admin">
         <header className="topbar admin-topbar">
           <h1>
-            🤖 E-bot 管理台
+            <img className="brand-logo" src="/brand-jellyfish-white.png" alt="" width="28" height="28" />
+            <span className="brand-name">agentFleet</span>
             {username ? <span className="admin-user">@{username}</span> : null}
             <span className="admin-ver">{CURRENT_VERSION}</span>
           </h1>
           <div className="topbar-actions">
-            <button type="button" onClick={() => setView('chat')}>返回对话</button>
+            <button type="button" className="ghost" onClick={() => setView('chat')}>返回对话</button>
             <button type="button" className="danger" onClick={doLogout}>退出</button>
           </div>
         </header>

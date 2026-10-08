@@ -5,7 +5,7 @@ Go backend + React admin UI + MySQL. Agents work in authorized workspaces with t
 
 ## Features (current, ~v0.2.17)
 
-- **Home chat (E-bot)** — Streaming Q&A over allowlisted workspaces; IP allowlist; optional read-only DB query via backend APIs.
+- **Home chat / receptionist** — Streaming Q&A over allowlisted workspaces; visitor cookie; optional read-only DB query via backend APIs. Product name: **agentFleet**.
 - **Managed agents** — Create agents with engine, binary path, rules prompt, workspace binding, and policy flags (write / network / rm / browser).
 - **Engine adapters** — Claude (`claude -p` stream-json + `--resume`), Codex (`codex exec --json` + thread resume), Cursor Agent (generic CLI).
 - **Permission proxy** — PreToolUse hook → backend classifier → browser approve/deny; session-level AI auto-review; Bark notify optional.

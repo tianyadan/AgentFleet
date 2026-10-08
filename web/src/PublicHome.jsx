@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { marked } from 'marked'
+import { agentAvatarUrl } from './agentAvatar.js'
 
 const API = '/api'
 marked.setOptions({ breaks: true, gfm: true })
@@ -38,12 +39,17 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
   const [ctxUsed, setCtxUsed] = useState(0)
   const [ctxWindow, setCtxWindow] = useState(0)
   const [ctxEstimated, setCtxEstimated] = useState(true)
+  const [showJumpBottom, setShowJumpBottom] = useState(false)
   const boxRef = useRef(null)
   const abortRef = useRef(null)
   const stickBottom = useRef(true)
 
   const configured = !!(receptionist && receptionist.configured)
   const ctxPct = ctxWindow > 0 ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : 0
+  const recvAvatar = agentAvatarUrl(receptionist || {})
+  const ctxTip = ctxWindow > 0
+    ? `${ctxEstimated ? '约 ' : ''}${ctxPct}%`
+    : '上下文用量未知'
 
   useEffect(() => {
     let cancelled = false
@@ -71,9 +77,32 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
   }, [])
 
   useEffect(() => {
-    if (!stickBottom.current || !boxRef.current) return
-    boxRef.current.scrollTop = boxRef.current.scrollHeight
+    const el = boxRef.current
+    if (!el) return
+    if (stickBottom.current) {
+      el.scrollTop = el.scrollHeight
+      setShowJumpBottom(false)
+    } else {
+      setShowJumpBottom(el.scrollHeight > el.clientHeight + 40)
+    }
   }, [chatLog, loading])
+
+  // 根据滚动位置决定是否显示「回到底部」
+  function updateStickFromScroll() {
+    const el = boxRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    stickBottom.current = nearBottom
+    setShowJumpBottom(!nearBottom && el.scrollHeight > el.clientHeight + 40)
+  }
+
+  function jumpToBottom() {
+    const el = boxRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    stickBottom.current = true
+    setShowJumpBottom(false)
+  }
 
   async function loadMessages() {
     try {
@@ -267,15 +296,16 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
     }
   }
 
-  const avatarLetter = (receptionist?.name || '前').slice(0, 1)
-
   return (
     <div className="ph-app">
       <header className="ph-top">
+        <img className="brand-logo ph-logo" src="/brand-jellyfish-white.png" alt="agentFleet" width="28" height="28" />
         <div className="ph-brand">
-          <div className="ph-avatar">{receptionist?.avatar_url
-            ? <img src={receptionist.avatar_url} alt="" />
-            : avatarLetter}</div>
+          <div className="ph-avatar">
+            {configured
+              ? <img src={recvAvatar} alt="" />
+              : (receptionist?.name || '前').slice(0, 1)}
+          </div>
           <div>
             <div className="ph-name">{configured ? receptionist.name : '数字人前台'}</div>
             <div className="ph-sub">
@@ -304,36 +334,45 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
         </div>
       ) : (
         <>
-          <div
-            className="ph-chat"
-            ref={boxRef}
-            onScroll={() => {
-              const el = boxRef.current
-              if (!el) return
-              stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-            }}
-          >
-            {chatLog.length === 0 && (
-              <div className="ph-opening ph-rise">
-                你好，我是 <strong>{receptionist.name}</strong>。有问题可以直接问我。
-              </div>
+          <div className="ph-chat-wrap">
+            <div
+              className="ph-chat"
+              ref={boxRef}
+              onScroll={updateStickFromScroll}
+            >
+              {chatLog.length === 0 && (
+                <div className="ph-opening ph-rise">
+                  你好，我是 <strong>{receptionist.name}</strong>。有问题可以直接问我。
+                </div>
+              )}
+              {chatLog.map((m, i) => (
+                <div key={i} className={`ph-msg ${m.role} ph-rise`} style={{ animationDelay: `${Math.min(i, 6) * 0.04}s` }}>
+                  <div className="ph-who">
+                    {m.role === 'user'
+                      ? '访'
+                      : <img src={recvAvatar} alt="" />}
+                  </div>
+                  <div className={`ph-bubble ${m.error ? 'err' : ''}`}>
+                    {m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1 ? (
+                      <span className="ph-typing"><i /><i /><i /></span>
+                    ) : (
+                      <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content || '') }} />
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {showJumpBottom && (
+              <button
+                type="button"
+                className="ph-jump-bottom"
+                onClick={jumpToBottom}
+                title="回到底部"
+                aria-label="回到底部"
+              >
+                <span className="ph-jump-arrow" aria-hidden>↓</span>
+              </button>
             )}
-            {chatLog.map((m, i) => (
-              <div key={i} className={`ph-msg ${m.role} ph-rise`} style={{ animationDelay: `${Math.min(i, 6) * 0.04}s` }}>
-                <div className="ph-who">
-                  {m.role === 'user' ? '访' : (receptionist.avatar_url
-                    ? <img src={receptionist.avatar_url} alt="" />
-                    : avatarLetter)}
-                </div>
-                <div className={`ph-bubble ${m.error ? 'err' : ''}`}>
-                  {m.role === 'assistant' && !m.content && loading && i === chatLog.length - 1 ? (
-                    <span className="ph-typing"><i /><i /><i /></span>
-                  ) : (
-                    <div dangerouslySetInnerHTML={{ __html: marked.parse(m.content || '') }} />
-                  )}
-                </div>
-              </div>
-            ))}
           </div>
 
           {error && <p className="ph-error">{error}</p>}
@@ -346,25 +385,32 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
                 onFocus={onComposerFocus}
                 onKeyDown={onKeyDown}
                 placeholder={visitor.registered ? '有问题尽管问…' : '登记后来访再提问…'}
-                disabled={loading || !configured}
+                disabled={!configured}
                 rows={2}
               />
               <div className="ph-composer-bar">
-                <div className="ph-ctx" title={ctxEstimated ? '上下文占用（约）' : '上下文占用'}>
+                <div className="ph-ctx" title={ctxTip} aria-label={ctxTip}>
                   <div className="ph-ring" style={{ '--p': ctxPct }} />
-                  <span>{ctxWindow > 0 ? `${ctxEstimated ? '约 ' : ''}${ctxPct}%` : '—'}</span>
                 </div>
                 <div className="ph-actions">
                   {loading ? (
-                    <button type="button" className="ph-ghost" onClick={() => abortRef.current?.abort()}>停止</button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ph-send"
-                    disabled={loading || !question.trim()}
-                    onClick={() => sendQuestion(question)}
-                    aria-label="发送"
-                  >↑</button>
+                    <button
+                      type="button"
+                      className="ph-send ph-stop"
+                      onClick={() => abortRef.current?.abort()}
+                      aria-label="终止"
+                      title="终止"
+                    >■</button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="ph-send"
+                      disabled={!question.trim()}
+                      onClick={() => sendQuestion(question)}
+                      aria-label="发送"
+                      title="发送"
+                    >↑</button>
+                  )}
                 </div>
               </div>
             </div>

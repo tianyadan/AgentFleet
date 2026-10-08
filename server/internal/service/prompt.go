@@ -8,7 +8,7 @@ import (
 
 // SystemPrompt 组装分身系统提示词(人设 + 只读 + 注入防御 + 数据查询)。
 func (s *Service) SystemPrompt(ctx context.Context) string {
-	persona := agent.Persona{Name: "E-bot 数字员工", Style: "严谨、简洁、专业"}
+	persona := agent.Persona{Name: "助手", Style: "严谨、简洁、专业"}
 	ws, _ := s.Store.CodeWorkspaces(ctx)
 	roots := make([]string, 0, len(ws))
 	for _, w := range ws {

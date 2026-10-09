@@ -48,6 +48,8 @@ type Service struct {
 	Memory   MemoryService
 	WF       *WorkflowEngine
 	Gateway  *permission.Gateway
+	// CodexContextCollector 允许测试注入临时 sessions 根目录；生产环境使用 ~/.codex/sessions。
+	CodexContextCollector agent.CodexSessionContextCollector
 
 	runMu sync.Mutex
 	runs  map[int64]*managedRun // managed agent 进行中的 Ask
@@ -73,6 +75,7 @@ func New(cfg config.Config, st *store.Store) *Service {
 		runs:           map[int64]*managedRun{},
 		cloneJobMap:    &sync.Map{},
 		compactPending: &sync.Map{},
+		CodexContextCollector: agent.DefaultCodexSessionContextCollector(),
 	}
 	svc.Gateway = permission.NewGateway(st, permission.NewJevosClient(cfg.JevosURL, cfg.JevosTimeoutSec))
 	svc.Sched = NewScheduler(svc)
@@ -111,6 +114,8 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	cwd := s.Cfg.WorkspaceRoot
 	var agentPolicy *permission.AgentPolicy
 	policyAgentName := ""
+	rulesPrompt := ""
+	policyNote := ""
 	if lookupID > 0 {
 		if ag, _ := s.Store.GetManagedAgent(ctx, lookupID); ag != nil {
 			engine = ag.Engine
@@ -120,6 +125,9 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 			}
 			agentPolicy = &p
 			policyAgentName = ag.Name
+			rulesPrompt = strings.TrimSpace(ag.RulesPrompt)
+			policyNote = fmt.Sprintf("name=%s allow_write=%v allow_network=%v allow_rm=%v allow_browser=%v workspace=%s",
+				ag.Name, ag.AllowWrite, ag.AllowNetwork, ag.AllowRm, ag.AllowBrowser, strings.TrimSpace(ag.WorkspacePath))
 			if ws := strings.TrimSpace(ag.WorkspacePath); ws != "" {
 				cwd = ws
 			}
@@ -127,6 +135,9 @@ func (s *Service) HandlePermissionRequest(ctx context.Context, tool string, inpu
 	}
 	action := permission.FromClaude(engine, convID, lookupID, tool, input, cwd)
 	action.PreExec = true
+	action.RulesPrompt = rulesPrompt
+	action.PolicyNote = policyNote
+	action.ContextSnippet = s.permissionContextSnippet(ctx, convID)
 	opt := permission.EvaluateOpts{Policy: agentPolicy, AllowAllExceptRm: s.Perms.IsAllowAllExceptRm(convID)}
 	pd := s.Gateway.Evaluate(ctx, action, opt)
 	summary := summarize(tool, input)
@@ -189,6 +200,38 @@ func riskFromScore(score float64) string {
 		return "high"
 	}
 	return "mid"
+}
+
+// permissionContextSnippet 取会话最近几轮问答摘要，供 JEVOS 结合意图判断。
+func (s *Service) permissionContextSnippet(ctx context.Context, convID int64) string {
+	if convID <= 0 || s.Store == nil {
+		return ""
+	}
+	turns, err := s.Store.RecentTurns(ctx, convID, 3)
+	if err != nil || len(turns) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, t := range turns {
+		u := strings.TrimSpace(t.User)
+		a := strings.TrimSpace(t.Assistant)
+		if len(u) > 240 {
+			u = u[:240] + "…"
+		}
+		if len(a) > 240 {
+			a = a[:240] + "…"
+		}
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("用户: ")
+		b.WriteString(u)
+		if a != "" {
+			b.WriteString("\n助手: ")
+			b.WriteString(a)
+		}
+	}
+	return b.String()
 }
 
 func (s *Service) recordPerm(ctx context.Context, convID int64, a permission.ToolAction, pd permission.PermissionDecision, decision, by, summary, note string) {

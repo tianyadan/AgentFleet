@@ -1,6 +1,17 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.3.8',
+    date: '2026-10-09',
+    items: [
+      '修复 @ 委托 Codex：resume 改绑被调方自己的会话，不再误用调用方 engine_session_id',
+      'Codex thread/resume 失效（no rollout found）时自动清空粘着 session，拼平台历史后无 resume 重试',
+      '清空数字人对话消息时同步清除引擎会话绑定，避免继续 resume 到已失效 thread',
+      'Codex「压缩记忆」改走 app-server thread/compact，避免 exec resume /compact 当普通 prompt 假死',
+      'JEVOS：needs_review 不再自动 DENY；聊天选区不被刷新打断，支持 Ctrl+Enter 发送与复制反馈',
+    ],
+  },
+  {
     version: 'v0.3.7',
     date: '2026-10-08',
     items: [

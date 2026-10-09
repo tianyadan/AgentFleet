@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
+	"time"
 )
 
 // ConversationEngineMeta 引擎会话与最近一次真实上下文占用。
@@ -10,6 +12,9 @@ type ConversationEngineMeta struct {
 	SessionID           string `json:"session_id"`
 	UsedTokens          int64  `json:"used_tokens"`
 	WindowTokens        int64  `json:"window_tokens"`
+	TotalTokens         int64  `json:"total_tokens"`
+	ContextSource       string `json:"context_source"`
+	ContextUpdatedAt    int64  `json:"context_updated_at"`
 	NeedsSystemReinject bool   `json:"needs_system_reinject"`
 }
 
@@ -23,9 +28,10 @@ func (s *Store) GetConversationEngineMeta(ctx context.Context, convID int64) (Co
 	var reinject int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT IFNULL(engine_session_id,''), IFNULL(engine_used_tokens,0), IFNULL(engine_window_tokens,0),
-		        IFNULL(needs_system_reinject,0)
+		        IFNULL(engine_total_tokens,0), IFNULL(engine_context_source,''),
+		        IFNULL(UNIX_TIMESTAMP(engine_context_updated_at),0), IFNULL(needs_system_reinject,0)
 		 FROM conversations WHERE id=?`, convID).
-		Scan(&sid, &m.UsedTokens, &m.WindowTokens, &reinject)
+		Scan(&sid, &m.UsedTokens, &m.WindowTokens, &m.TotalTokens, &m.ContextSource, &m.ContextUpdatedAt, &reinject)
 	if err == sql.ErrNoRows {
 		return m, nil
 	}
@@ -51,6 +57,21 @@ func (s *Store) GetConversationEngineMeta(ctx context.Context, convID int64) (Co
 	}
 	m.NeedsSystemReinject = reinject != 0
 	return m, nil
+}
+
+// UpdateConversationContextSnapshot 保存实际上下文快照；累计 session 用量单独保存。
+func (s *Store) UpdateConversationContextSnapshot(ctx context.Context, convID int64, used, window, total int64, source string, observedAt time.Time) error {
+	if convID <= 0 || strings.TrimSpace(source) == "" {
+		return nil
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE conversations SET engine_used_tokens=?, engine_window_tokens=?, engine_total_tokens=?,
+		       engine_context_source=?, engine_context_updated_at=? WHERE id=?`,
+		used, window, total, source, observedAt, convID)
+	return err
 }
 
 // SetConversationNeedsSystemReinject 标记/清除压缩后需重带系统提示。
@@ -92,7 +113,9 @@ func (s *Store) ClearConversationEngineMeta(ctx context.Context, convID int64) e
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET engine_session_id=NULL, engine_used_tokens=0, engine_window_tokens=0, needs_system_reinject=0 WHERE id=?`, convID)
+		`UPDATE conversations SET engine_session_id=NULL, engine_used_tokens=0, engine_window_tokens=0,
+		 engine_total_tokens=0, engine_context_source='', engine_context_updated_at=NULL,
+		 needs_system_reinject=0 WHERE id=?`, convID)
 	// 兼容无 needs_system_reinject 列
 	if err != nil {
 		_, err = s.db.ExecContext(ctx,
@@ -107,6 +130,6 @@ func (s *Store) ResetConversationUsedTokens(ctx context.Context, convID int64) e
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET engine_used_tokens=0 WHERE id=?`, convID)
+		`UPDATE conversations SET engine_used_tokens=0, engine_context_source='', engine_context_updated_at=NULL WHERE id=?`, convID)
 	return err
 }

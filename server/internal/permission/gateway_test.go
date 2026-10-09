@@ -85,6 +85,7 @@ func TestGatewaySessionAllowExact(t *testing.T) {
 }
 
 func TestJevosScoreBands(t *testing.T) {
+	// 旧单指标边界仍保留（用于兼容）
 	if DecisionFromRisk(0.45) != DecisionAllow {
 		t.Fatal("0.45 allow")
 	}
@@ -96,6 +97,56 @@ func TestJevosScoreBands(t *testing.T) {
 	}
 	if DecisionFromRisk(0.60) != DecisionDeny {
 		t.Fatal("0.60 deny")
+	}
+}
+
+// needs_review 高分只应人工复核，不得因「需要审核」直接拒绝。
+func TestDecisionFromJevosNeedsReviewIsNotDeny(t *testing.T) {
+	jr := JEVOSResult{
+		Destructive: 0.2, DataLoss: 0.1, ServiceImpact: 0.1,
+		PermissionRisk: 0.2, CredentialRisk: 0.1, NeedsReview: 0.9,
+		RiskScore: 0.9,
+	}
+	if DecisionFromJevos(jr) != DecisionReview {
+		t.Fatalf("needs_review high must REVIEW, got %s", DecisionFromJevos(jr))
+	}
+}
+
+// 明确高危害仍走 REVIEW（弹人工），由 Hard Deny / 策略层负责硬拒绝。
+func TestDecisionFromJevosHighHarmGoesReviewNotAutoDeny(t *testing.T) {
+	jr := JEVOSResult{
+		Destructive: 0.95, DataLoss: 0.9, NeedsReview: 0.3, RiskScore: 0.95,
+	}
+	if DecisionFromJevos(jr) != DecisionReview {
+		t.Fatalf("want REVIEW not auto DENY, got %s", DecisionFromJevos(jr))
+	}
+}
+
+func TestDecisionFromJevosLowRiskAllow(t *testing.T) {
+	jr := JEVOSResult{
+		Destructive: 0.1, DataLoss: 0.1, ServiceImpact: 0.1,
+		PermissionRisk: 0.1, CredentialRisk: 0.1, NeedsReview: 0.2,
+		RiskScore: 0.2,
+	}
+	if DecisionFromJevos(jr) != DecisionAllow {
+		t.Fatalf("want ALLOW, got %s", DecisionFromJevos(jr))
+	}
+}
+
+func TestJSONStateIncludesAgentContext(t *testing.T) {
+	a := FromShell("claude", 1, 2, "npm test", "/ws", "")
+	a.RulesPrompt = "允许在工作区内跑测试"
+	a.PolicyNote = "allow_write=true"
+	a.ContextSnippet = "用户: 帮我跑一下单测"
+	st := a.JSONState()
+	if st["agent_rules"] != a.RulesPrompt {
+		t.Fatalf("missing agent_rules: %+v", st)
+	}
+	if st["agent_policy"] != a.PolicyNote {
+		t.Fatalf("missing agent_policy: %+v", st)
+	}
+	if st["conversation_context"] != a.ContextSnippet {
+		t.Fatalf("missing conversation_context: %+v", st)
 	}
 }
 
@@ -115,6 +166,17 @@ func TestGatewayJevosAllow(t *testing.T) {
 	d := g.Evaluate(nil, a, EvaluateOpts{})
 	if d.Decision != DecisionAllow || d.DecidedBy != DecidedByJevos {
 		t.Fatalf("got %+v", d)
+	}
+}
+
+// 高 riskScore（含 needs_review）不得再自动 DENY，应转人工 REVIEW。
+func TestGatewayJevosHighScoreGoesReview(t *testing.T) {
+	g := NewGateway(NewMemorySessions(), jevosStub{score: 0.85})
+	a := FromShell("claude", 1, 1, "npm test", "/ws", "")
+	a.RulesPrompt = "允许运行测试"
+	d := g.Evaluate(nil, a, EvaluateOpts{})
+	if d.Decision != DecisionReview || d.DecidedBy != DecidedByJevos {
+		t.Fatalf("want REVIEW, got %+v", d)
 	}
 }
 

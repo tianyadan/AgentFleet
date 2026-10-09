@@ -58,16 +58,19 @@ func (j *jevosHTTP) Review(ctx context.Context, a ToolAction) (JEVOSResult, erro
 	}
 	cctx, cancel := context.WithTimeout(ctx, j.timeout)
 	defer cancel()
+	// 问题显式要求结合 state 中的 agent_rules / agent_policy / conversation_context，
+	// 避免仅凭命令字符串「直觉」否决已授权的正常开发操作。
+	ctxHint := " Use agent_rules, agent_policy, and conversation_context in state. If the agent is authorized for this kind of work inside its workspace, answer low. Prefer human review over hard refusal when unsure."
 	body := map[string]any{
 		"model": "jev-latest",
 		"state": a.JSONState(),
 		"questions": map[string]any{
-			"destructive":     noulQ("Would this command destroy data, disks, or the system beyond a reversible project change?"),
-			"data_loss":       noulQ("Would this likely cause unrecoverable data loss?"),
-			"service_impact":  noulQ("Would this stop, restart, or disrupt a running service?"),
-			"permission_risk": noulQ("Would this change permissions, ownership, or security boundaries?"),
-			"credential_risk": noulQ("Would this expose, send, or modify credentials or secrets?"),
-			"needs_review":    noulQ("Should a human review this before it runs?"),
+			"destructive":     noulQ("Would this command destroy data, disks, or the system beyond a reversible project change?" + ctxHint),
+			"data_loss":       noulQ("Would this likely cause unrecoverable data loss?" + ctxHint),
+			"service_impact":  noulQ("Would this stop, restart, or disrupt a running service outside the agent's authorized workspace?" + ctxHint),
+			"permission_risk": noulQ("Would this change permissions, ownership, or security boundaries beyond what agent_policy allows?" + ctxHint),
+			"credential_risk": noulQ("Would this expose, send, or modify credentials or secrets?" + ctxHint),
+			"needs_review":    noulQ("Should a human review this before it runs? Answer high only if genuinely ambiguous; authorized routine project work should be low." + ctxHint),
 		},
 	}
 	raw, _ := json.Marshal(body)
@@ -131,12 +134,25 @@ func truncate(s string, n int) string {
 }
 
 // DecisionFromRisk 边界：<=0.45 ALLOW；>0.45 且 <0.60 REVIEW；>=0.60 DENY。
+// 兼容旧单指标用法；Gateway 请用 DecisionFromJevos。
 func DecisionFromRisk(score float64) string {
 	if score <= 0.45 {
 		return DecisionAllow
 	}
 	if score >= 0.60 {
 		return DecisionDeny
+	}
+	return DecisionReview
+}
+
+// DecisionFromJevos 综合多问号结果：
+// - needs_review 高分 → 人工（REVIEW），绝不因此直接 DENY；
+// - 危害类问号均低且 needs_review 不高 → ALLOW；
+// - 其余不确定 → REVIEW（弹人工），Hard Deny / 数字人策略层负责硬拒绝。
+func DecisionFromJevos(jr JEVOSResult) string {
+	harm := maxNoul(jr.Destructive, jr.DataLoss, jr.ServiceImpact, jr.PermissionRisk, jr.CredentialRisk)
+	if harm <= 0.45 && jr.NeedsReview <= 0.50 {
+		return DecisionAllow
 	}
 	return DecisionReview
 }

@@ -114,7 +114,7 @@ func (s *Service) summarizeProjectSession(ctx context.Context, a *store.ManagedA
 	sys := "你是工作总结助手。只输出简洁中文摘要正文，不要超过300字，不要标题堆砌。"
 	q := fmt.Sprintf("项目「%s」即将解散。请根据当前协作会话中你做过的事，写一段不超过300字的总结：做了什么、关键结论、未完成事项。只输出摘要正文。", projectName)
 	// 使用协作会话 resume；走正常 hook/resume 路径（不改主会话指针）
-	out, _, err := s.runManagedEngine(ctx, a, sys, q, "", nil, nil, convID, a.ID, false, nil)
+	out, _, err := s.runManagedEngine(ctx, a, sys, q, "", nil, nil, convID, a.ID, convID, false, nil)
 	if err != nil {
 		return "", err
 	}

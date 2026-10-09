@@ -245,7 +245,7 @@ func (s *Service) askManagedCore(ctx context.Context, a *store.ManagedAgent, fix
 	}
 
 	// history 有 session 时恒空；丢失时由 runManagedEngine 回退 RecentTurns
-	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, sys, q, "", onChunk, onEvent, userQuestion)
+	out, ms, runErr := s.runEngineWithRecover(runCtx, a, convID, convID, sys, q, "", onChunk, onEvent, userQuestion)
 	msg, err := s.finishManagedAsk(runCtx, agentID, convID, opts.bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(runCtx, convID, onEvent)
 	s.finalizeVisitorAskAudit(runCtx, opts.visitorAudit, msg, runErr)
@@ -309,7 +309,7 @@ func (s *Service) askManagedWithInvokes(
 	userTurns, _ := s.Store.CountUserMessages(ctx, convID)
 	sumQ = MaybeReinforcePolicy(caller, userTurns, sumQ)
 
-	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, sys, sumQ, "", onChunk, onEvent, taskBody)
+	out, ms, runErr := s.runEngineWithRecover(ctx, caller, convID, convID, sys, sumQ, "", onChunk, onEvent, taskBody)
 	msg, err := s.finishManagedAsk(ctx, caller.ID, convID, bindMainConv, out, ms, runErr, tp, opts)
 	s.flushCompactAfterAsk(ctx, convID, onEvent)
 	s.finalizeVisitorAskAudit(ctx, opts.visitorAudit, msg, runErr)
@@ -451,7 +451,7 @@ func (s *Service) StopManaged(agentID int64) bool {
 	return true
 }
 
-// ClearManagedChat 清空当前会话消息。
+// ClearManagedChat 清空当前会话消息，并解除引擎 session 绑定（避免 Codex resume 到已失效 thread）。
 func (s *Service) ClearManagedChat(ctx context.Context, agentID int64) error {
 	a, err := s.Store.GetManagedAgent(ctx, agentID)
 	if err != nil || a == nil {
@@ -463,5 +463,8 @@ func (s *Service) ClearManagedChat(ctx context.Context, agentID int64) error {
 	if a.ConversationID == 0 {
 		return nil
 	}
-	return s.Store.ClearConversationMessages(ctx, a.ConversationID)
+	if err := s.Store.ClearConversationMessages(ctx, a.ConversationID); err != nil {
+		return err
+	}
+	return s.Store.ClearConversationEngineMeta(ctx, a.ConversationID)
 }

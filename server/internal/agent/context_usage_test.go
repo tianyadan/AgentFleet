@@ -52,7 +52,7 @@ func TestContextFromProbe_NotEstimated(t *testing.T) {
 	}
 }
 
-func TestBuildEngineContextSnapshot_CodexCached(t *testing.T) {
+func TestBuildEngineContextSnapshot_CodexDoesNotTreatTurnUsageAsContext(t *testing.T) {
 	s := BuildEngineContextSnapshot(ContextBuildInput{
 		Engine:         "codex",
 		SessionID:      "t1",
@@ -60,7 +60,17 @@ func TestBuildEngineContextSnapshot_CodexCached(t *testing.T) {
 		CachedWindow:   0,
 		FallbackWindow: 200000,
 	})
-	if !s.Estimated || s.Source != "cached" || s.WindowTokens != 200000 || s.UsedTokens != 3000 {
+	if !s.Estimated || s.Source != "unavailable" || s.WindowTokens != 0 || s.UsedTokens != 0 {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+func TestContextFromCodexSessionPreservesRawAnomaly(t *testing.T) {
+	s := ContextFromCodexSession(CodexSessionContext{
+		SessionID: "thread", UsedTokens: 300, WindowTokens: 200, TotalTokens: 900,
+		Source: "codex_session", Anomaly: "current_context_exceeds_window",
+	})
+	if s.Estimated || s.Source != "codex_session" || s.UsedPercent != 150 || s.TotalTokens != 900 || s.Anomaly == "" {
 		t.Fatalf("got %+v", s)
 	}
 }
@@ -105,6 +115,9 @@ func TestInferEstimatedFromLegacy_NoField(t *testing.T) {
 	}
 	if !InferEstimated("claude", "cached") {
 		t.Fatal("claude cached legacy => estimated")
+	}
+	if InferEstimated("codex", "codex_session") {
+		t.Fatal("codex session snapshot => not estimated")
 	}
 	if !InferEstimated("codex", "cached") || !InferEstimated("agent", "") {
 		t.Fatal("codex/cursor default estimated")

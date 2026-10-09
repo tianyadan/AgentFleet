@@ -55,13 +55,39 @@ func TestCompactArgsCursor(t *testing.T) {
 }
 
 func TestCompactArgsCodex(t *testing.T) {
-	args := CompactArgs("codex", "thread-1", "/compact")
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "resume") || !strings.Contains(joined, "thread-1") {
-		t.Fatalf("want resume thread: %v", args)
+	// Codex 走 app-server compact，不再生成 exec+"/compact" 参数。
+	if args := CompactArgs("codex", "thread-1", "/compact"); args != nil {
+		t.Fatalf("codex CompactArgs should be nil, got %v", args)
 	}
-	if !strings.Contains(joined, "/compact") {
-		t.Fatalf("want /compact: %v", args)
+}
+
+func TestIsCodexAppServerCompactionDone(t *testing.T) {
+	done := map[string]interface{}{
+		"method": "item/completed",
+		"params": map[string]interface{}{
+			"item": map[string]interface{}{"type": "contextCompaction", "id": "c1"},
+		},
+	}
+	if !IsCodexAppServerCompactionDone(done) {
+		t.Fatal("want contextCompaction completed")
+	}
+	started := map[string]interface{}{
+		"method": "item/started",
+		"params": map[string]interface{}{
+			"item": map[string]interface{}{"type": "contextCompaction"},
+		},
+	}
+	if IsCodexAppServerCompactionDone(started) {
+		t.Fatal("started should not count as done")
+	}
+	other := map[string]interface{}{
+		"method": "item/completed",
+		"params": map[string]interface{}{
+			"item": map[string]interface{}{"type": "agentMessage"},
+		},
+	}
+	if IsCodexAppServerCompactionDone(other) {
+		t.Fatal("agentMessage completed should be false")
 	}
 }
 

@@ -35,16 +35,20 @@ func isTerminalKillErr(err error) bool {
 }
 
 // runEngineWithRecover 终端被杀后自检并续跑(有限次)。
+// sessionConv：引擎 resume 绑定；permConv：授权弹窗归属（@委托时二者可不同）。
 func (s *Service) runEngineWithRecover(
 	ctx context.Context,
 	a *store.ManagedAgent,
-	convID int64,
+	sessionConv, permConv int64,
 	sys, question, history string,
 	onChunk func(string),
 	onEvent AskEventSink,
 	userTask string,
 ) (out string, ms int, err error) {
-	out, ms, err = s.runManagedEngine(ctx, a, sys, question, history, onChunk, activityFromSink(onEvent), convID, a.ID, false, onEvent)
+	if permConv == 0 {
+		permConv = sessionConv
+	}
+	out, ms, err = s.runManagedEngine(ctx, a, sys, question, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent)
 	if err == nil || !isTerminalKillErr(err) || ctx.Err() != nil {
 		return out, ms, err
 	}
@@ -53,15 +57,19 @@ func (s *Service) runEngineWithRecover(
 	for attempt := 1; attempt <= maxTerminalRecover; attempt++ {
 		msg := "⚠️ 数字员工任务中断（进程被中断），正在自检任务状态…（失败重试 " + itoa(attempt) + "/" + itoa(maxTerminalRecover) + "）"
 		emitAsk(onEvent, map[string]any{"type": "system_note", "content": msg})
+		noteConv := sessionConv
+		if noteConv == 0 {
+			noteConv = permConv
+		}
 		_, _ = s.Store.InsertMessage(context.WithoutCancel(ctx), &store.Message{
-			ConversationID: convID, Role: "system", Content: msg, Status: "ok",
+			ConversationID: noteConv, Role: "system", Content: msg, Status: "ok",
 		})
 		if onChunk != nil {
 			onChunk("\n\n" + msg + "\n\n")
 		}
 
 		checkQ := buildRecoverPrompt(userTask, partial, err.Error())
-		out2, ms2, err2 := s.runManagedEngine(ctx, a, sys, checkQ, history, onChunk, activityFromSink(onEvent), convID, a.ID, false, onEvent)
+		out2, ms2, err2 := s.runManagedEngine(ctx, a, sys, checkQ, history, onChunk, activityFromSink(onEvent), permConv, a.ID, sessionConv, false, onEvent)
 		ms += ms2
 		if err2 == nil {
 			joined := strings.TrimSpace(partial)

@@ -176,7 +176,7 @@ func (s *Service) planStepsViaEngine(ctx context.Context, a *store.ManagedAgent,
 	b.WriteString(question)
 
 	sys := "你是任务拆分助手,只输出 JSON 数组。"
-	out, _, err := s.runManagedEngine(ctx, a, sys, b.String(), "", nil, nil, 0, 0, true, nil)
+	out, _, err := s.runManagedEngine(ctx, a, sys, b.String(), "", nil, nil, 0, 0, 0, true, nil)
 	if err != nil {
 		return nil
 	}

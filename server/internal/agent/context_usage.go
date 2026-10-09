@@ -3,18 +3,22 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ContextSnapshot Adapter 产出的统一上下文占用快照。
-// 注意：Codex/Cursor 的 used 来自最近一轮 turn usage（input+cache），
-// 不等于引擎内部真实 active context occupancy；Estimated=true 时务必当估算展示。
+// 注意：Codex 的真实 active context occupancy 仅来自本机 rollout token_count；
+// turn usage 与累计 session usage 都不能作为该值的替代。
 type ContextSnapshot struct {
 	SessionID    string
 	UsedTokens   int64
 	WindowTokens int64
+	TotalTokens  int64
 	UsedPercent  float64
 	Estimated    bool
-	Source       string // probe | cached | unavailable
+	Source       string // probe | codex_session | cached | unavailable
+	ObservedAt   time.Time
+	Anomaly      string
 	TextExtra    string // 附加说明（探测原文/降级原因）
 }
 
@@ -62,6 +66,22 @@ func ContextFromProbe(sessionID string, used, window int64) ContextSnapshot {
 	return s
 }
 
+// ContextFromCodexSession 将 Codex rollout 中的 token_count 转为精确上下文快照。
+func ContextFromCodexSession(c CodexSessionContext) ContextSnapshot {
+	s := ContextSnapshot{
+		SessionID:    c.SessionID,
+		UsedTokens:   c.UsedTokens,
+		WindowTokens: c.WindowTokens,
+		TotalTokens:  c.TotalTokens,
+		Estimated:    false,
+		Source:       "codex_session",
+		ObservedAt:   c.ObservedAt,
+		Anomaly:      c.Anomaly,
+	}
+	s.UsedPercent = PercentOf(s.UsedTokens, s.WindowTokens)
+	return s
+}
+
 // EstimatedContextFromCache 用最近一次落库/缓存 usage 做估算快照（Codex/Cursor/Claude 降级）。
 func EstimatedContextFromCache(sessionID string, used, window, fallbackWindow int64) ContextSnapshot {
 	if window <= 0 {
@@ -86,6 +106,9 @@ func BuildEngineContextSnapshot(in ContextBuildInput) ContextSnapshot {
 	}
 
 	switch eng {
+	case "codex":
+		// Codex 必须由调用方提供 rollout token_count；不能退回单轮 usage。
+		return ContextSnapshot{SessionID: in.SessionID, Source: "unavailable", Estimated: true}
 	case "claude":
 		if in.AllowProbe && in.Probe != nil && strings.TrimSpace(in.SessionID) != "" {
 			used, window, raw, err := in.Probe()
@@ -121,12 +144,10 @@ func BuildEngineContextSnapshot(in ContextBuildInput) ContextSnapshot {
 		return ContextSnapshot{SessionID: in.SessionID, Source: "unavailable", Estimated: true}
 
 	default:
-		// Codex / Cursor Agent：无官方 active context API → 固定估算
+		// Cursor Agent：无官方 active context API → 固定估算
 		if in.CachedUsed > 0 || in.CachedWindow > 0 || in.FallbackWindow > 0 {
 			s := EstimatedContextFromCache(in.SessionID, in.CachedUsed, in.CachedWindow, in.FallbackWindow)
 			switch eng {
-			case "codex":
-				s.TextExtra = "（Codex：展示最近一轮 turn usage 估算；CLI 无统一 /context。turn usage ≠ 真实 context occupancy）"
 			case "agent":
 				s.TextExtra = "（Cursor Agent：展示最近一轮 turn usage 估算。turn usage ≠ 真实 context occupancy）"
 			}
@@ -143,7 +164,7 @@ func BuildEngineContextSnapshot(in ContextBuildInput) ContextSnapshot {
 func InferEstimated(engine, source string) bool {
 	eng := strings.ToLower(strings.TrimSpace(engine))
 	src := strings.ToLower(strings.TrimSpace(source))
-	if eng == "claude" && src == "probe" {
+	if (eng == "claude" && src == "probe") || (eng == "codex" && src == "codex_session") {
 		return false
 	}
 	return true

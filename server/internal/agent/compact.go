@@ -21,10 +21,8 @@ func CompactArgs(engine, sessionID, prompt string) []string {
 	}
 	switch strings.ToLower(strings.TrimSpace(engine)) {
 	case "codex":
-		return []string{
-			"exec", "--skip-git-repo-check", "-s", "workspace-write",
-			"resume", sid, p,
-		}
+		// Codex 手动压缩走 app-server（见 RunCodexCompact），不再用 exec+"/compact"。
+		return nil
 	case "cursor", "agent":
 		return []string{"-p", "--output-format", "json", "--resume", sid, p}
 	default: // claude
@@ -41,22 +39,19 @@ func RunEngineCompact(ctx context.Context, bin, engine, dir, sessionID string, t
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	if bin == "" {
 		bin = DefaultBin(engine)
 	}
-	args := CompactArgs(engine, sid, "/compact")
-	// Codex 需要 -C 在 resume 前
-	if strings.EqualFold(strings.TrimSpace(engine), "codex") && strings.TrimSpace(dir) != "" {
-		args = []string{
-			"exec", "--skip-git-repo-check", "-s", "workspace-write",
-			"-C", dir, "resume", sid, "/compact",
-		}
+	// Codex：exec resume "/compact" 在非交互模式不可靠，会当普通 prompt 跑很久。
+	if strings.EqualFold(strings.TrimSpace(engine), "codex") {
+		return RunCodexCompact(ctx, bin, dir, sid, timeout)
 	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	args := CompactArgs(engine, sid, "/compact")
 	cmd := exec.CommandContext(cctx, bin, args...)
 	AttachKillable(cmd)
-	if dir != "" && !strings.EqualFold(strings.TrimSpace(engine), "codex") {
+	if dir != "" {
 		cmd.Dir = dir
 	}
 	cmd.Env = CleanEnv(os.Environ())

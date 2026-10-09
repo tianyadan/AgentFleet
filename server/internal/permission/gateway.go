@@ -71,8 +71,9 @@ func (g *Gateway) Evaluate(ctx context.Context, a ToolAction, opt EvaluateOpts) 
 	if err != nil {
 		return PermissionDecision{Decision: DecisionReview, Reason: "JEVOS 不可用，转人工: " + err.Error(), DecidedBy: DecidedByJevos, RuleID: "jevos_error"}
 	}
-	dec := DecisionFromRisk(jr.RiskScore)
-	reason := fmt.Sprintf("JEVOS riskScore=%.2f", jr.RiskScore)
+	dec := DecisionFromJevos(jr)
+	harm := maxNoul(jr.Destructive, jr.DataLoss, jr.ServiceImpact, jr.PermissionRisk, jr.CredentialRisk)
+	reason := fmt.Sprintf("JEVOS harm=%.2f needs_review=%.2f → %s", harm, jr.NeedsReview, dec)
 	return PermissionDecision{
 		Decision: dec, RiskScore: jr.RiskScore, Reason: reason,
 		DecidedBy: DecidedByJevos, RuleID: "jevos_band", JEVOSResult: jr,

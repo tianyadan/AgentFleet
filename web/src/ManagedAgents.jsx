@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { hasBearerToken, shouldForceLogout } from './authRequest.js'
 import { ListCollapseIcon } from './adminMenuIcons.jsx'
-import AgentMarkdown from './agentMarkdown.jsx'
+import AgentMarkdown, { selectionInside } from './agentMarkdown.jsx'
 import { agentAvatarUrl, compressImageFile } from './agentAvatar.js'
 import {
   allPendingPerms,
@@ -316,7 +316,10 @@ export default function ManagedAgentsPanel({
     if (force || !getAgentSession(id).loading) {
       const fromDb = mapMsgs(msgData.items)
       const next = force ? coalesceChatLog(getAgentSession(id).chatLog, fromDb) : fromDb
-      setAgentChatLog(id, next)
+      // 划选复制中不要整表替换聊天 DOM
+      if (!selectionInside(boxRef.current)) {
+        setAgentChatLog(id, next)
+      }
       patchAgentSession(id, {
         totalMessages: msgData.total || 0,
         hasMore: !!msgData.has_more,
@@ -413,7 +416,8 @@ export default function ManagedAgentsPanel({
   useEffect(() => {
     if (!active || !stickBottomRef.current) return
     const el = boxRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    // 用户正在划选正文时不要强滚到底，否则选区会被冲掉
+    if (el && !selectionInside(el)) el.scrollTop = el.scrollHeight
   }, [chatLog, loading, active, permQueue.length])
 
   useEffect(() => {
@@ -803,6 +807,8 @@ export default function ManagedAgentsPanel({
         const inv = { ...(getAgentSession(agentId).invokes || {}) }
         Object.keys(inv).forEach((k) => { inv[k] = { ...inv[k], collapsed: true } })
         patchAgentSession(agentId, { invokes: inv, liveActivity: null })
+		// 回合结束后从引擎状态接口刷新；Codex 不可将 SSE 的 turn usage 当上下文。
+		void refreshAgentContext(agentId, false)
       } else if (ev.type === 'invoke_status') {
         const id = String(ev.callee_id)
         const inv = { ...(getAgentSession(agentId).invokes || {}) }
@@ -847,10 +853,7 @@ export default function ManagedAgentsPanel({
         )
         const patch = {}
         if (turn > 0) patch.taskTokens = turn
-        if (Number(ev.used_tokens) > 0) patch.contextUsed = Number(ev.used_tokens)
-        if (Number(ev.window_tokens) > 0) patch.contextWindow = Number(ev.window_tokens)
-        // SSE usage 来自本轮 turn，恒为估算（缺省 true 兼容旧后端）
-        patch.contextEstimated = ev.estimated !== false
+		// SSE usage 是本轮统计，只记录任务消耗；圆环统一由 /context 刷新。
         if (Object.keys(patch).length) patchAgentSession(agentId, patch)
       } else if (ev.type === 'task_progress') {
         // 触发 tasks 刷新由轮询承接
@@ -860,11 +863,7 @@ export default function ManagedAgentsPanel({
           { role: 'system', content: ev.content || '系统提示', time: Date.now() },
         ])
       } else if (ev.type === 'context_compacted') {
-        // compact 后重置圆环估算，避免沿用旧 session 占用
-        patchAgentSession(agentId, {
-          contextUsed: Number(ev.used_tokens) || 0,
-          contextEstimated: true,
-        })
+		// 压缩后的真实上下文值以随后 rollout token_count 快照为准。
         // 运行中不拆毁流式气泡（Codex 常在回合末尾发 compact，否则回复会闪现后消失）
         if (getAgentSession(agentId).loading) {
           setAgentChatLog(agentId, (prev) => [
@@ -966,6 +965,10 @@ export default function ManagedAgentsPanel({
         contextUsed: Number(d.used_tokens) || 0,
         contextWindow: Number(d.window_tokens) || 0,
         contextEstimated: estimated,
+		contextSource: src,
+		contextTotalTokens: Number(d.total_tokens) || 0,
+		contextUpdatedAt: Number(d.context_updated_at) || 0,
+		contextAnomaly: d.anomaly || '',
       })
     } catch { /* ignore */ }
   }
@@ -1131,7 +1134,7 @@ export default function ManagedAgentsPanel({
         setMentionIdx((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length)
         return
       }
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         insertMention(mentionCandidates[mentionIdx])
         return
@@ -1141,7 +1144,9 @@ export default function ManagedAgentsPanel({
         return
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Ctrl/Cmd+Enter 发送；单独 Enter 换行，避免字没打完就发出
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      if (e.nativeEvent.isComposing) return
       e.preventDefault()
       if (selected?.status === 'initializing' || isCloneInitBusy(selected)) return
       ask()
@@ -1500,9 +1505,7 @@ export default function ManagedAgentsPanel({
                         <span className="cmd-by">{byLabel(m.decidedBy)}</span>
                       )}
                       {m.role === 'assistant' && (m.content || '').trim() && (
-                        <button type="button" className="ma-copy-btn" onClick={() => copyText(m.content)} title="复制回复">
-                          复制
-                        </button>
+                        <CopyTextButton text={m.content} />
                       )}
                       {m.replySec > 0 && <span className="reply-sec">{fmtSec(m.replySec)}</span>}
                     </div>
@@ -1597,13 +1600,16 @@ export default function ManagedAgentsPanel({
                     onChange={onComposerChange}
                     onKeyDown={onKeyDown}
                     rows={3}
-                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Enter 发送；@ 可协作其他同事' : '输入任务，Enter 发送；输入 @ 选择其他同事')}
+                    placeholder={initializing ? '初始化中，请稍候…' : (loading ? '输入插话内容，Ctrl+Enter 发送；@ 可协作其他同事' : '输入任务，Ctrl+Enter 发送，Enter 换行；输入 @ 选择其他同事')}
                     disabled={initializing}
                   />
                   <ContextRing
                     used={sess.contextUsed || 0}
                     window={sess.contextWindow || 0}
                     estimated={sess.contextEstimated !== false}
+					source={sess.contextSource || ''}
+					updatedAt={sess.contextUpdatedAt || 0}
+					anomaly={sess.contextAnomaly || ''}
                   />
                 </div>
                 <div className="ma-composer-actions">
@@ -2066,23 +2072,11 @@ function PermCard({ p, more, busy, onDecide }) {
 function CmdBlock({ content, risk, meaning, decision, note }) {
   const r = risk || (decision === 'deny' ? 'high' : 'mid')
   const riskText = ({ low: '无害', mid: '需注意', high: '高风险' })[r] || '需注意'
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(content || '')
-    } catch {
-      const ta = document.createElement('textarea')
-      ta.value = content || ''
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      ta.remove()
-    }
-  }
   return (
     <div className={`cmd-block risk-${r} ${decision === 'deny' ? 'denied' : ''}`}>
       <div className="cmd-block-main">
         <code>{content}</code>
-        <button type="button" className="cmd-copy" onClick={copy} title="复制命令">复制</button>
+        <CopyTextButton text={content} className="cmd-copy" />
       </div>
       {note ? <pre className="ma-tl-out">{note}</pre> : null}
       {(meaning || risk) && (
@@ -2123,6 +2117,26 @@ async function copyText(text) {
   }
 }
 
+/** 复制按钮：成功后短暂显示「已复制」 */
+function CopyTextButton({ text, className = 'ma-copy-btn' }) {
+  const [copied, setCopied] = useState(false)
+  async function onCopy() {
+    await copyText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
+  }
+  return (
+    <button
+      type="button"
+      className={`${className}${copied ? ' is-copied' : ''}`}
+      onClick={onCopy}
+      title={copied ? '已复制' : '复制回复'}
+    >
+      {copied ? '已复制' : '复制'}
+    </button>
+  )
+}
+
 /** 运行态：银灰 thinking + token + 工具活动条 */
 function RunStatus({ interrupting, activity, runSec, taskTokens }) {
   const [phraseIdx, setPhraseIdx] = useState(0)
@@ -2152,19 +2166,22 @@ function RunStatus({ interrupting, activity, runSec, taskTokens }) {
 }
 
 /** 输入框右下角上下文占比圆环；百分比仅悬停 title 展示 */
-function ContextRing({ used, window: win, estimated = true }) {
+function ContextRing({ used, window: win, estimated = true, source = '', updatedAt = 0, anomaly = '' }) {
   const size = 22
   const stroke = 2.5
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
-  const pct = win > 0 ? Math.min(1, used / win) : 0
-  const dash = c * pct
-  const pctNum = Math.round(pct * 100)
+  const rawPct = win > 0 ? (used / win) : 0
+	// SVG 只能画完整圆；原始占比不截断，异常仍在 title 与 class 中完整保留。
+  const dash = c * Math.min(1, Math.max(0, rawPct))
+  const pctNum = Math.round(rawPct * 100)
+	const sourceLabel = source === 'codex_session' ? 'Codex Session 快照' : source
+	const timeLabel = updatedAt > 0 ? `\n更新时间：${new Date(updatedAt * 1000).toLocaleString()}` : ''
   const title = win > 0
-    ? (estimated ? `约 ${pctNum}%` : `${pctNum}%`)
+    ? `${estimated ? '约 ' : ''}${pctNum}%${sourceLabel ? `\n来源：${sourceLabel}` : ''}${timeLabel}${anomaly ? `\n异常：${anomaly}` : ''}`
     : '上下文用量未知'
   return (
-    <div className={`ma-ctx-ring${estimated ? ' is-estimated' : ''}`} title={title} aria-label={title}>
+    <div className={`ma-ctx-ring${estimated ? ' is-estimated' : ''}${anomaly || rawPct > 1 ? ' is-anomaly' : ''}`} title={title} aria-label={title}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#333" strokeWidth={stroke} />
         <circle

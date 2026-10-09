@@ -67,9 +67,11 @@ func (s *Service) releaseAgentRun(agentID int64, slot *managedRun) {
 	slot.cancel()
 }
 
-// runManagedEngine 跑引擎;permConvID/policyAgentID 控制授权路由(委托时 conv=调用方,policy=被调方)。
+// runManagedEngine 跑引擎。
+// sessionConvID：读写 engine_session_id / 拼平台历史（被调方记忆应绑自己的会话）。
+// permConvID/policyAgentID：授权路由（委托时弹窗挂调用方，策略取被调方）。
 // noHook=true 用于任务拆分等轻量调用,避免再次弹授权。
-func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID int64, noHook bool, onEvent AskEventSink) (string, int, error) {
+func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, sys, question, history string, onChunk func(string), onActivity agent.ActivityFn, permConvID, policyAgentID, sessionConvID int64, noHook bool, onEvent AskEventSink) (string, int, error) {
 	bin := a.BinPath
 	if bin == "" {
 		bin = store.DefaultBin(a.Engine)
@@ -79,9 +81,17 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		dir = ws
 	}
 	timeout := s.Cfg.AskTimeout()
-	metaConv := permConvID
+	// 记忆会话：优先显式 sessionConv；否则员工主会话；再不济用授权会话
+	metaConv := sessionConvID
 	if metaConv == 0 {
 		metaConv = a.ConversationID
+	}
+	if metaConv == 0 {
+		metaConv = permConvID
+	}
+	hookConv := permConvID
+	if hookConv == 0 {
+		hookConv = metaConv
 	}
 	// noHook：拆分/摘要等轻量调用，禁止污染主会话 engine_session（否则 Claude resume 会卡在「只输出 JSON」）
 	persistSession := !noHook && metaConv > 0
@@ -124,24 +134,20 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 		hook := agent.HookSpec{}
 		// HookBin 存在即注入：PreToolUse + Pre/PostCompact（压缩同步不依赖 PermissionEnabled）
 		if !noHook && s.Cfg.HookBin != "" {
-			cid := permConvID
-			if cid == 0 {
-				cid = a.ConversationID
-			}
 			pid := policyAgentID
 			if pid == 0 {
 				pid = a.ID
 			}
 			hook = agent.HookSpec{
 				Bin: s.Cfg.HookBin, Backend: s.Cfg.BackendURL,
-				ConvID: cid, PolicyAgentID: pid,
+				ConvID: hookConv, PolicyAgentID: pid,
 				TimeoutS: s.Cfg.PermissionWaitSeconds() + 30,
 			}
 		}
 		return r.AskStream(ctx, dir, sys, question, history, onChunk, timeout, hook, onActivity, onMeta, resume)
 	case "codex":
-		if !noHook && s.Cfg.HookBin != "" && metaConv > 0 {
-			agent.EnsureCodexPermissionHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, metaConv)
+		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
+			agent.EnsureCodexPermissionHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
 		// 不写项目 .codex Compact hooks：Pre/PostCompact 会与 ask 竞态清库。
 		// 仅监听 JSONL compaction，并延后到 finishManagedAsk 之后再同步。
@@ -160,19 +166,33 @@ func (s *Service) runManagedEngine(ctx context.Context, a *store.ManagedAgent, s
 				"pre_exec_intercept": false,
 				"output": ev.Output, "exit_code": ev.ExitCode,
 			})
-			if metaConv > 0 {
-				s.recordCommand(context.WithoutCancel(ctx), metaConv, "Bash", summary, "allow", "codex", "low", "Codex 已执行命令（未保证执行前拦截）", strings.TrimSpace(ev.Output))
+			if hookConv > 0 {
+				s.recordCommand(context.WithoutCancel(ctx), hookConv, "Bash", summary, "allow", "codex", "low", "Codex 已执行命令（未保证执行前拦截）", strings.TrimSpace(ev.Output))
 			}
 		}
 		onCompact := func() {
 			// 只打标，等回复落库后再 Sync，避免 loadDetail 读到被清空的库
 			s.markCompactPending(metaConv)
 		}
-		return agent.CodexAskMetaEx(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact)
+		out, ms, err := agent.CodexAskMetaEx(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume, onCmd, onCompact)
+		// thread 在本机已无 rollout：清掉粘着的 session，拼平台历史后无 resume 重试
+		if err != nil && resume != "" && agent.IsCodexResumeGone(err.Error()) {
+			_ = s.Store.ClearConversationEngineMeta(context.WithoutCancel(ctx), metaConv)
+			if strings.TrimSpace(history) == "" {
+				turns, _ := s.Store.RecentTurns(ctx, metaConv, 12)
+				history = FormatResumeHistory(turns, question)
+			}
+			emitAsk(onEvent, map[string]any{
+				"type": "system_note",
+				"content": "⚠️ Codex 旧 thread 已失效（无 rollout），已清空会话绑定并重新开聊",
+			})
+			return agent.CodexAskMetaEx(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, "", onCmd, onCompact)
+		}
+		return out, ms, err
 	default:
 		// Cursor Agent 等：--resume + JSON 解析 session_id
-		if !noHook && s.Cfg.HookBin != "" && metaConv > 0 {
-			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, metaConv)
+		if !noHook && s.Cfg.HookBin != "" && hookConv > 0 {
+			agent.EnsureCursorCompactHook(dir, s.Cfg.HookBin, s.Cfg.BackendURL, hookConv)
 		}
 		return agent.GenericAskMeta(ctx, bin, dir, sys, question, history, onChunk, timeout, onActivity, onMeta, resume)
 	}
@@ -228,12 +248,13 @@ func (s *Service) invokeOne(ctx context.Context, caller *store.ManagedAgent, m M
 	sys := BuildAgentSystemPrompt(a)
 	q := fmt.Sprintf("【协作任务】由同事「%s」委托你执行。请直接完成下列任务并给出结果,不要反问调用方。\n\n%s",
 		caller.Name, strings.TrimSpace(taskBody))
-	// 授权弹窗挂到调用方会话;策略仍用被调方
+	// 记忆/resume 绑被调方自己的会话；授权弹窗挂调用方（策略仍用被调方）
+	sessionConv := a.ConversationID
 	permConv := caller.ConversationID
 	if permConv == 0 {
-		permConv = a.ConversationID
+		permConv = sessionConv
 	}
-	out, ms, runErr := s.runEngineWithRecover(runCtx, a, permConv, sys, q, "", nil, sink, taskBody)
+	out, ms, runErr := s.runEngineWithRecover(runCtx, a, sessionConv, permConv, sys, q, "", nil, sink, taskBody)
 	res.Ms = ms
 	if runErr != nil {
 		res.Err = runErr.Error()
@@ -342,7 +363,7 @@ func (s *Service) writeInvokeDividersAsync(caller *store.ManagedAgent, userTask 
 func (s *Service) summarizeForCallee(ctx context.Context, caller *store.ManagedAgent, userTask string, r InvokeResult) string {
 	prompt := fmt.Sprintf("用一两句中文总结：同事「%s」委托「%s」完成了什么、结果如何。只输出摘要正文。\n任务：%s\n结果：%s\n错误：%s",
 		caller.Name, r.AgentName, truncate(userTask, 300), truncate(r.Content, 1500), r.Err)
-	out, _, err := s.runManagedEngine(ctx, caller, "你是摘要助手,只输出一两句中文摘要。", prompt, "", nil, nil, 0, 0, true, nil)
+	out, _, err := s.runManagedEngine(ctx, caller, "你是摘要助手,只输出一两句中文摘要。", prompt, "", nil, nil, 0, 0, 0, true, nil)
 	out = strings.TrimSpace(out)
 	if err != nil || out == "" {
 		if r.Err != "" {

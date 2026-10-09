@@ -48,6 +48,10 @@ type ToolAction struct {
 	WorkingDir     string
 	Environment    string
 	Purpose        string
+	// 送 JEVOS 的数字人上下文（系统提示词 / 权限策略摘要 / 近期对话）
+	RulesPrompt     string
+	PolicyNote      string
+	ContextSnippet  string
 	PreExec        bool // 是否在执行前拦截；false 表示只能事后审计
 	Raw            any
 	argv           []string // 解析后的规范化 argv
@@ -142,14 +146,27 @@ func strAny(v any) string {
 	return strings.TrimSpace(s)
 }
 
-// JSONState JEVOS state 载荷。
+// JSONState JEVOS state 载荷（含数字人系统提示词与对话上下文，供风险判断参考）。
 func (a ToolAction) JSONState() map[string]any {
 	return map[string]any{
-		"engine":      a.Engine,
-		"command":     a.Command,
-		"working_dir": a.WorkingDir,
-		"environment": a.Environment,
-		"purpose":     a.Purpose,
-		"action_type": a.ActionType,
+		"engine":                a.Engine,
+		"tool_name":             a.ToolName,
+		"command":               a.Command,
+		"working_dir":           a.WorkingDir,
+		"environment":           a.Environment,
+		"purpose":               a.Purpose,
+		"action_type":           a.ActionType,
+		"agent_rules":           truncateRunes(a.RulesPrompt, 2500),
+		"agent_policy":          a.PolicyNote,
+		"conversation_context":  truncateRunes(a.ContextSnippet, 2000),
 	}
+}
+
+func truncateRunes(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	// 按字节截断即可（提示词为 UTF-8，避免引入额外依赖）
+	return s[:max] + "…"
 }

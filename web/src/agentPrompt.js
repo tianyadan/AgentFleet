@@ -1,9 +1,9 @@
 // 多 Agent 进度上报提示词(给其他 AI 粘贴执行)。BASE 用相对 /api,局域网请替换为实际 origin。
 export function buildAgentPrompt(baseUrl = '') {
   const api = (baseUrl || (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:5173')).replace(/\/$/, '')
-  return `# agentFleet · 多 Agent 任务进度上报
+  return `# Atolla · 多 Agent 任务进度上报
 
-你正在协助田浩文的 agentFleet 数字员工平台。请在执行任务过程中,把进度上报到统一管理中心,便于用户在管理台查询进度。
+你正在协助田浩文的 Atolla 数字员工平台。请在执行任务过程中,把进度上报到统一管理中心,便于用户在管理台查询进度。
 
 ## 上报接口
 - Method: POST

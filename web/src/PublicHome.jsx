@@ -299,7 +299,7 @@ export default function PublicHome({ authToken, onLogin, onOpenAdmin }) {
   return (
     <div className="ph-app">
       <header className="ph-top">
-        <img className="brand-logo ph-logo" src="/brand-jellyfish-white.png" alt="agentFleet" width="28" height="28" />
+        <img className="brand-logo ph-logo" src="/brand-jellyfish-white.png" alt="Atolla" width="28" height="28" />
         <div className="ph-brand">
           <div className="ph-avatar">
             {configured

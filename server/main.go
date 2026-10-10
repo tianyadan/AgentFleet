@@ -5,11 +5,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/config"
-	"colleague-avatar/server/internal/auth"
-	"colleague-avatar/server/internal/handler"
-	"colleague-avatar/server/internal/service"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/config"
+	"atolla/server/internal/auth"
+	"atolla/server/internal/handler"
+	"atolla/server/internal/service"
+	"atolla/server/internal/store"
 )
 
 func main() {
@@ -29,7 +29,7 @@ func main() {
 	}
 	h.Register(r)
 
-	log.Printf("colleague-avatar listening on %s", cfg.Addr)
+	log.Printf("atolla listening on %s", cfg.Addr)
 	if err := r.Run(cfg.Addr); err != nil {
 		svc.Perms.CloseAll()
 		svc.Sched.Stop()

@@ -9,7 +9,7 @@ import (
 // Config 汇总后端所需配置。全部用环境变量覆盖,可用 .env 或 scripts/start.sh 注入。
 type Config struct {
 	Addr          string   // HTTP 监听地址
-	DBDSN         string   // MySQL DSN(本地 colleague_avatar)
+	DBDSN         string   // MySQL DSN(本地 MySQL 库 colleague_avatar（历史库名，保持兼容）)
 	DataDBDSN     string   // 数据查询库 DSN;为空时禁用 /api/db 查询能力
 	ClaudeBin     string   // claude CLI 路径
 	AllowedIPs    []string // 局域网 IP 白名单
@@ -41,7 +41,7 @@ type Config struct {
 	OSSAccessKeySecret string
 	OSSBucket          string
 	OSSPrefix          string // object 前缀，如 avatars/
-	OSSPublicBase      string // 公网访问根，如 https://digital-employee-qd.cn-qingdao.taihangcda.cn
+	OSSPublicBase      string // 公网访问根，如 https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com
 
 	// 各引擎默认上下文窗口（Codex/Cursor 无官方 occupancy 时作估算分母；可用环境变量覆盖）
 	ContextWindowClaude int64
@@ -79,12 +79,12 @@ func Load() Config {
 		NotifyScript:      getenv("AVATAR_NOTIFY_SCRIPT", ""),
 		BarkNotify:        getenv("AVATAR_BARK_NOTIFY", "1") != "0",
 
-		SecretKey:                getenv("AVATAR_SECRET_KEY", "colleague-avatar-dev-secret-change-me"),
+		SecretKey:                getenv("AVATAR_SECRET_KEY", "atolla-dev-secret-change-me"),
 		SSHInsecureIgnoreHostKey: getenv("AVATAR_SSH_INSECURE_IGNORE_HOSTKEY", "1") != "0",
 
 		AdminUser:   getenv("AVATAR_ADMIN_USER", "tianhaowen"),
 		AdminPass:   getenv("AVATAR_ADMIN_PASS", "12345678"),
-		JWTSecret:   getenv("AVATAR_JWT_SECRET", "colleague-avatar-jwt-dev-secret-change-me"),
+		JWTSecret:   getenv("AVATAR_JWT_SECRET", "atolla-jwt-dev-secret-change-me"),
 		JWTTTLHours: atoi(getenv("AVATAR_JWT_TTL_HOURS", "168")),
 
 		OSSEndpoint:        strings.TrimSpace(getenv("AVATAR_OSS_ENDPOINT", "")),
@@ -92,7 +92,7 @@ func Load() Config {
 		OSSAccessKeySecret: strings.TrimSpace(getenv("AVATAR_OSS_ACCESS_KEY_SECRET", "")),
 		OSSBucket:          strings.TrimSpace(getenv("AVATAR_OSS_BUCKET", "")),
 		OSSPrefix:          strings.Trim(strings.TrimSpace(getenv("AVATAR_OSS_PREFIX", "avatars/")), "/") + "/",
-		OSSPublicBase:      strings.TrimRight(strings.TrimSpace(getenv("AVATAR_OSS_PUBLIC_BASE", "")), "/"),
+		OSSPublicBase:      normalizeOSSPublicBase(getenv("AVATAR_OSS_PUBLIC_BASE", "")),
 
 		JevosURL:        getenv("AVATAR_JEVOS_URL", "http://127.0.0.1:8017"),
 		JevosTimeoutSec: atoi(getenv("AVATAR_JEVOS_TIMEOUT_SEC", "20")),
@@ -128,6 +128,21 @@ func (c Config) ContextWindowForEngine(engine string) int64 {
 func (c Config) OSSConfigured() bool {
 	return c.OSSEndpoint != "" && c.OSSAccessKeyID != "" && c.OSSAccessKeySecret != "" &&
 		c.OSSBucket != "" && c.OSSPublicBase != ""
+}
+
+// 旧自定义域未绑 HTTPS 证书，浏览器加载会 SSL 主机名失败；统一改写为官方桶域名。
+const brokenOSSPublicHost = "digital-employee-qd.cn-qingdao.taihangcda.cn"
+const officialOSSPublicBase = "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com"
+
+func normalizeOSSPublicBase(raw string) string {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return ""
+	}
+	if strings.Contains(base, brokenOSSPublicHost) {
+		return officialOSSPublicBase
+	}
+	return base
 }
 
 // JWTTTL 返回管理员 JWT 有效期(至少 1 小时)。

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // AgentStatusInitializing 复制后隐藏初始化尚未完成。

@@ -1,5 +1,5 @@
 // avatar-hook 是引擎 CLI 的 hook 桥：
-// 1) PreToolUse：把工具授权请求转发到数字分身后端，等真人前端裁决。
+// 1) PreToolUse：把工具授权请求转发到 Atolla 后端，等真人前端裁决。
 // 2) PreCompact / PostCompact / preCompact：通知后端同步清库（平台对话历史）。
 //
 // 由后端 --settings / 工作区 hooks.json 注入，输入为 stdin 上的 hook JSON。

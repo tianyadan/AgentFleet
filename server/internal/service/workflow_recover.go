@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // NodeExecSnapshot 恢复规划用的节点最新 attempt 摘要。

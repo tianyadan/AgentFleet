@@ -48,6 +48,18 @@ func TestBuildAvatarObjectURL(t *testing.T) {
 	if u != "https://cdn.example.com/avatars/agent-1-9.jpg" {
 		t.Fatal(u)
 	}
+	fixed := BuildAvatarObjectURL("https://digital-employee-qd.cn-qingdao.taihangcda.cn/", "avatars/", "a.jpg")
+	if fixed != "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com/avatars/a.jpg" {
+		t.Fatal(fixed)
+	}
+}
+
+func TestRewriteStoredAvatarURL(t *testing.T) {
+	in := "https://digital-employee-qd.cn-qingdao.taihangcda.cn/avatars/x.jpg"
+	want := "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com/avatars/x.jpg"
+	if got := RewriteStoredAvatarURL(in); got != want {
+		t.Fatal(got)
+	}
 }
 
 func max(a, b int) int {

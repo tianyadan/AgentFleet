@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // AgentTaskReport 接收某 agent 上报的任务进度(可插拔: agent_type 区分来源)。

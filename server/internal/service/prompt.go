@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"colleague-avatar/server/internal/agent"
+	"atolla/server/internal/agent"
 )
 
 // SystemPrompt 组装分身系统提示词(人设 + 只读 + 注入防御 + 数据查询)。

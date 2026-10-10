@@ -45,9 +45,20 @@ func TestOSSConfigured(t *testing.T) {
 		OSSEndpoint: "oss-cn-qingdao.aliyuncs.com",
 		OSSAccessKeyID: "id", OSSAccessKeySecret: "sec",
 		OSSBucket: "digital-employee-qd",
-		OSSPublicBase: "https://digital-employee-qd.cn-qingdao.taihangcda.cn",
+		OSSPublicBase: "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com",
 	}
 	if !c.OSSConfigured() {
 		t.Fatal("want configured")
+	}
+}
+
+func TestNormalizeOSSPublicBaseRewritesBrokenCNAME(t *testing.T) {
+	got := normalizeOSSPublicBase("https://digital-employee-qd.cn-qingdao.taihangcda.cn/")
+	if got != officialOSSPublicBase {
+		t.Fatalf("got %q", got)
+	}
+	keep := "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com"
+	if normalizeOSSPublicBase(keep) != keep {
+		t.Fatal("official base should stay")
 	}
 }

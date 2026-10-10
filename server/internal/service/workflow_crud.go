@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // CreateWorkflow 新建编排。

@@ -7,8 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/internal/service"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/service"
+	"atolla/server/internal/store"
 )
 
 // AdminWorkflowsList 编排列表（附带最新运行状态）。

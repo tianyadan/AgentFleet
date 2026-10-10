@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // imageExt 允许通过 file API 返回的图片扩展名。

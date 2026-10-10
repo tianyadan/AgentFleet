@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/internal/store"
-	"colleague-avatar/server/internal/visitorcookie"
+	"atolla/server/internal/store"
+	"atolla/server/internal/visitorcookie"
 )
 
 // PublicReceptionist GET /api/public/receptionist

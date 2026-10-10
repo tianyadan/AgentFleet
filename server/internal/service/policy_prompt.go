@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // BuildAgentSystemPrompt 拼系统提示 + 权限策略硬约束。

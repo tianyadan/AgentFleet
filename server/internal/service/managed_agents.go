@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // AskManaged 管理台数字员工一轮对话;onEvent 推送 SSE 事件(chunk/invoke_*/…)。可被 StopManaged 取消。

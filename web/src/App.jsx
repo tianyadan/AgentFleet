@@ -771,7 +771,7 @@ export default function App() {
         <header className="topbar admin-topbar">
           <h1>
             <img className="brand-logo" src="/brand-jellyfish-white.png" alt="" width="28" height="28" />
-            <span className="brand-name">agentFleet</span>
+            <span className="brand-name">Atolla</span>
             {username ? <span className="admin-user">@{username}</span> : null}
             <span className="admin-ver">{CURRENT_VERSION}</span>
           </h1>

@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/internal/agent"
-	"colleague-avatar/server/internal/testsrv"
+	"atolla/server/internal/agent"
+	"atolla/server/internal/testsrv"
 )
 
 func (h *Handler) requireTestServerIP() gin.HandlerFunc {

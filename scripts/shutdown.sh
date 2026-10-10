@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 关闭数字分身前后端(不动数据库)
+# 关闭 Atolla 前后端(不动数据库)
 # 用法: scripts/shutdown.sh
 set -e
 cd "$(dirname "$0")/.."
@@ -48,7 +48,7 @@ kill_pattern() {
 echo "==> 关闭同事分身前后端(数据库不动)"
 kill_port "$BACKEND_PORT" "Go 后端"
 kill_port "$FRONTEND_PORT" "Vite 前端"
-kill_pattern "$ROOT/server.*(go run|colleague-avatar)" "Go 后端"
+kill_pattern "$ROOT/server.*(go run|atolla)" "Go 后端"
 kill_pattern "$ROOT/web.*vite" "Vite 前端"
 
 echo "==> 完成. MySQL/docker 未改动."

@@ -9,8 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/config"
-	"colleague-avatar/server/internal/service"
+	"atolla/server/config"
+	"atolla/server/internal/service"
 )
 
 func testAuthHandler() *Handler {

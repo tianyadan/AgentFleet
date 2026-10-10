@@ -60,10 +60,28 @@ func CompressAvatarImage(raw []byte, maxEdge int) ([]byte, error) {
 // BuildAvatarObjectURL 拼接公网访问 URL。
 func BuildAvatarObjectURL(publicBase, prefix, objectName string) string {
 	base := strings.TrimRight(strings.TrimSpace(publicBase), "/")
+	// 兼容进程未重启时仍带着坏 CNAME 的环境变量。
+	if strings.Contains(base, "digital-employee-qd.cn-qingdao.taihangcda.cn") {
+		base = "https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com"
+	}
 	p := strings.Trim(strings.TrimSpace(prefix), "/")
 	name := strings.TrimLeft(strings.TrimSpace(objectName), "/")
 	if p == "" {
 		return base + "/" + name
 	}
 	return base + "/" + p + "/" + name
+}
+
+// RewriteStoredAvatarURL 把库里历史坏域名改写成可访问的官方 OSS 域名（展示用）。
+func RewriteStoredAvatarURL(url string) string {
+	u := strings.TrimSpace(url)
+	if u == "" {
+		return ""
+	}
+	const broken = "digital-employee-qd.cn-qingdao.taihangcda.cn"
+	const official = "digital-employee-qd.oss-cn-qingdao.aliyuncs.com"
+	if strings.Contains(u, broken) {
+		return strings.ReplaceAll(u, broken, official)
+	}
+	return u
 }

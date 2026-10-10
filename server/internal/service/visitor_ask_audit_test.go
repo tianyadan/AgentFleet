@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 func TestFinalizeVisitorAskAuditNilSafe(t *testing.T) {

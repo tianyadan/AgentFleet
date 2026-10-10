@@ -1,6 +1,15 @@
 // 版本变更历史(管理台「版本」菜单)。新版本追加到数组顶部。
 export const CHANGELOG = [
   {
+    version: 'v0.3.9',
+    date: '2026-10-10',
+    items: [
+      '产品品牌与仓库名统一为 Atolla（原 agentFleet / AgentFleet）',
+      'Go module 改为 atolla/server；Docker MySQL 容器名改为 atolla-mysql（库名 colleague_avatar 保持兼容）',
+      '头像公网域改官方 OSS 桶域名，修复自定义 CNAME SSL 不匹配导致头像不回显',
+    ],
+  },
+  {
     version: 'v0.3.8',
     date: '2026-10-09',
     items: [

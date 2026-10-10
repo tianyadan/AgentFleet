@@ -1,11 +1,11 @@
-# AgentFleet
+# Atolla
 
 Local-first platform for running a fleet of **digital colleague agents** backed by CLI engines (Claude / Codex / Cursor Agent).  
 Go backend + React admin UI + MySQL. Agents work in authorized workspaces with tool-permission gates, occupancy control, and optional team workflows.
 
 ## Features (current, ~v0.2.17)
 
-- **Home chat / receptionist** — Streaming Q&A over allowlisted workspaces; visitor cookie; optional read-only DB query via backend APIs. Product name: **agentFleet**.
+- **Home chat / receptionist** — Streaming Q&A over allowlisted workspaces; visitor cookie; optional read-only DB query via backend APIs. Product name: **Atolla**.
 - **Managed agents** — Create agents with engine, binary path, rules prompt, workspace binding, and policy flags (write / network / rm / browser).
 - **Engine adapters** — Claude (`claude -p` stream-json + `--resume`), Codex (`codex exec --json` + thread resume), Cursor Agent (generic CLI).
 - **Permission proxy** — PreToolUse hook → backend classifier → browser approve/deny; session-level AI auto-review; Bark notify optional.
@@ -26,7 +26,7 @@ Go backend + React admin UI + MySQL. Agents work in authorized workspaces with t
 ## Layout
 
 ```
-AgentFleet/
+Atolla/
 ├── db/                 # schema + versioned migrations
 ├── docker-compose.yml  # MySQL
 ├── docs/plan/          # feature design notes
@@ -80,7 +80,7 @@ Set via environment (defaults are also applied in `scripts/start.sh`). **Overrid
 | `AVATAR_OSS_ACCESS_KEY_ID` / `AVATAR_OSS_ACCESS_KEY_SECRET` | OSS credentials | _(in local `.env` only)_ |
 | `AVATAR_OSS_BUCKET` | OSS bucket | `digital-employee-qd` |
 | `AVATAR_OSS_PREFIX` | Object key prefix | `avatars/` |
-| `AVATAR_OSS_PUBLIC_BASE` | Public URL base (CNAME) | e.g. `https://digital-employee-qd.cn-qingdao.taihangcda.cn` |
+| `AVATAR_OSS_PUBLIC_BASE` | Public URL base（须 HTTPS 证书匹配；自定义域未绑证时用官方桶域名） | `https://digital-employee-qd.oss-cn-qingdao.aliyuncs.com` |
 
 Copy `.env.example` → `.env` for local secrets. `scripts/start.sh` auto-loads `.env`.
 

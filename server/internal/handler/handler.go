@@ -11,10 +11,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/internal/auth"
-	"colleague-avatar/server/internal/permission"
-	"colleague-avatar/server/internal/service"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/auth"
+	"atolla/server/internal/permission"
+	"atolla/server/internal/service"
+	"atolla/server/internal/store"
 )
 
 // Handler 收集路由处理函数。

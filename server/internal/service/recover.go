@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"colleague-avatar/server/internal/agent"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/agent"
+	"atolla/server/internal/store"
 )
 
 const maxTerminalRecover = 2

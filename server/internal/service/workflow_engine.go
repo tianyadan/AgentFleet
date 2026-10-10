@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // WorkflowEngine 进程内 DAG 推进器。

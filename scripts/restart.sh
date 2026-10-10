@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 重启数字分身前后端(不动数据库)
+# 重启 Atolla 前后端(不动数据库)
 # 用法: scripts/restart.sh
 set -e
 cd "$(dirname "$0")/.."

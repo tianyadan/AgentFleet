@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // ReceptionistPublic 公开接口返回的前台助理摘要。

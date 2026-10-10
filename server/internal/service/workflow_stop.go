@@ -1,6 +1,6 @@
 package service
 
-import "colleague-avatar/server/internal/store"
+import "atolla/server/internal/store"
 
 // CollectWorkflowStopAgentIDs 收集应随工作流终止而停掉的数字员工（占用 + 仍在跑的 agent 节点）。
 func CollectWorkflowStopAgentIDs(runID int64, occ map[int64]store.Occupancy, nes []store.NodeExecution) []int64 {

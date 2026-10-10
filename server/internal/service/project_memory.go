@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // SafeProjectDirName 将项目名转为可作目录名的安全片段。

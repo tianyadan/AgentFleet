@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 启动数字分身: MySQL(docker) + Go 后端 + React 前端
+# 启动 Atolla: MySQL(docker) + Go 后端 + React 前端
 # 用法: scripts/start.sh [--skip-db]
 set -e
 cd "$(dirname "$0")/.."
@@ -23,7 +23,9 @@ fi
 
 echo "==> 等待 MySQL 就绪"
 for i in {1..30}; do
-  if docker exec colleague-avatar-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1; then
+  # 兼容旧容器名 colleague-avatar-mysql
+  if docker exec atolla-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1 \
+    || docker exec colleague-avatar-mysql mysqladmin ping -uroot -proot --silent >/dev/null 2>&1; then
     break
   fi
   sleep 1

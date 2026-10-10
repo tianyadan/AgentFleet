@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/internal/auth"
+	"atolla/server/internal/auth"
 )
 
 // Login 管理员登录,签发 JWT。

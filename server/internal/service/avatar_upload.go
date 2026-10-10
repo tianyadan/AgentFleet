@@ -9,7 +9,7 @@ import (
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // UploadAgentAvatar 压缩并上传到 OSS，更新 avatar_url。

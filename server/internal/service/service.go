@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"colleague-avatar/server/config"
-	"colleague-avatar/server/internal/agent"
-	"colleague-avatar/server/internal/auth"
-	"colleague-avatar/server/internal/dbquery"
-	"colleague-avatar/server/internal/notify"
-	"colleague-avatar/server/internal/permission"
-	"colleague-avatar/server/internal/store"
-	"colleague-avatar/server/internal/testsrv"
+	"atolla/server/config"
+	"atolla/server/internal/agent"
+	"atolla/server/internal/auth"
+	"atolla/server/internal/dbquery"
+	"atolla/server/internal/notify"
+	"atolla/server/internal/permission"
+	"atolla/server/internal/store"
+	"atolla/server/internal/testsrv"
 )
 
 const (

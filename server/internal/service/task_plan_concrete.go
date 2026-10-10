@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 var vagueStepRe = regexp.MustCompile(`(?i)(正在规划|正在执行|正在输出|规划中|\b执行中\b|输出结果|处理中|开始任务|整理并回复|理解需求与目标|执行任务)`)

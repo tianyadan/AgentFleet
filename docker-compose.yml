@@ -1,7 +1,7 @@
 services:
   mysql:
     image: mysql:8.0
-    container_name: colleague-avatar-mysql
+    container_name: atolla-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"colleague-avatar/server/internal/agent"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/agent"
+	"atolla/server/internal/store"
 )
 
 // AgentStatusCompressing 数字员工「压缩记忆」工作状态。

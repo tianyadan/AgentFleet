@@ -3,7 +3,7 @@ package service
 import (
 	"fmt"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // AgentConflict 启动协作时与现有占用冲突的员工。

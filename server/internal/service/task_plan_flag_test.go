@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 func TestShouldEmitTaskPlan(t *testing.T) {

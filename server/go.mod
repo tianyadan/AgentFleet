@@ -1,4 +1,4 @@
-module colleague-avatar/server
+module atolla/server
 
 go 1.26.5
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/store"
 )
 
 // TaskProgress 管理某轮 Ask 的进度上报(agent_type=managed)。

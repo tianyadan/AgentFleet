@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"colleague-avatar/server/internal/permission"
+	"atolla/server/internal/permission"
 )
 
 func (s *Store) ensurePermissionGatewaySchema(ctx context.Context) error {

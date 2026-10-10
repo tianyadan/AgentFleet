@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"colleague-avatar/server/config"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/config"
+	"atolla/server/internal/store"
 )
 
 func TestResolveAgentImageRelative(t *testing.T) {

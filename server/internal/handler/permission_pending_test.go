@@ -9,10 +9,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"colleague-avatar/server/config"
-	"colleague-avatar/server/internal/auth"
-	"colleague-avatar/server/internal/permission"
-	"colleague-avatar/server/internal/service"
+	"atolla/server/config"
+	"atolla/server/internal/auth"
+	"atolla/server/internal/permission"
+	"atolla/server/internal/service"
 )
 
 // TestPermissionPendingAdminSeesAdminOwner 管理 JWT 应能看到 user_ip=admin 的挂起授权。

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"colleague-avatar/server/internal/agent"
-	"colleague-avatar/server/internal/store"
+	"atolla/server/internal/agent"
+	"atolla/server/internal/store"
 )
 
 // EngineContext 引擎上下文占用（供状态按钮与圆环）。

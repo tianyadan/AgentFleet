@@ -98,8 +98,8 @@ func RunCodexCompact(ctx context.Context, bin, dir, sessionID string, timeout ti
 		"id":     1,
 		"params": map[string]interface{}{
 			"clientInfo": map[string]interface{}{
-				"name":    "colleague-avatar",
-				"title":   "colleague-avatar",
+				"name":    "atolla",
+				"title":   "atolla",
 				"version": "1.0.0",
 			},
 		},
